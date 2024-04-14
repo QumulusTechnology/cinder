@@ -446,10 +446,9 @@ class VStorageRESTFCDriverTest(test.TestCase):
         self.configuration.nec_v_lun_retry_interval = (
             hbsd_rest._LUN_RETRY_INTERVAL)
         self.configuration.nec_v_restore_timeout = hbsd_rest._RESTORE_TIMEOUT
-        self.configuration.nec_v_state_transition_timeout = (
-            hbsd_rest._STATE_TRANSITION_TIMEOUT)
+        self.configuration.nec_v_state_transition_timeout = 2
         self.configuration.nec_v_lock_timeout = hbsd_rest_api._LOCK_TIMEOUT
-        self.configuration.nec_v_rest_timeout = hbsd_rest_api._REST_TIMEOUT
+        self.configuration.nec_v_rest_timeout = 3
         self.configuration.nec_v_extend_timeout = (
             hbsd_rest_api._EXTEND_TIMEOUT)
         self.configuration.nec_v_exec_retry_interval = (
@@ -932,7 +931,8 @@ class VStorageRESTFCDriverTest(test.TestCase):
             self.driver.copy_image_to_volume(
                 self.ctxt, TEST_VOLUME[0], image_service, image_id)
         mock_copy_image.assert_called_with(
-            self.ctxt, TEST_VOLUME[0], image_service, image_id)
+            self.ctxt, TEST_VOLUME[0], image_service, image_id,
+            disable_sparse=False)
         self.assertEqual(1, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
