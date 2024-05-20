@@ -682,22 +682,17 @@ class LinstorDriver(driver.VolumeDriver):
             )
 
             try:
-                src.clone(volume['name'], use_zfs_clone=False)
-
-                clone = _get_existing_resource(
-                    self.c.get(),
-                    volume['name'],
-                    existing_client=self.c.get(),
-                )
+                rsc = src.clone(volume['name'], use_zfs_clone=False)
                 
-                if clone.volumes[0].size < expected_size:
-                    clone.volumes[0].size = expected_size
+                expected_size = volume['size'] * units.Gi                 
+                if rsc.volumes[0].size < expected_size:
+                    rsc.volumes[0].size = expected_size
                     
             except linstor.LinstorError:
                 # Ensure we don't have invalid volumes lying around in the backend
                 LOG.exception('Could not clone Linstor volume, '
                               'deleting clone')
-                clone.delete()
+                rsc.delete()
                 raise
             
     @wrap_linstor_api_exception
