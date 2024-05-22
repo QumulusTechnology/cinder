@@ -497,7 +497,7 @@ class LinstorDriver(driver.VolumeDriver):
             snapshot['volume']['name'],
             snapshot['volume_id'],
         )
-        
+
         try:
             rsc = _restore_snapshot_to_new_resource(
                 src, snapshot, volume['name'],
@@ -532,11 +532,19 @@ class LinstorDriver(driver.VolumeDriver):
         be enforced in Cinder, Linstor just double checks.
         :param cinder.objects.volume.Volume volume: the volume to delete
         """
-        rsc = _get_existing_resource(
-            self.c.get(),
-            volume['name'],
-            volume['id'],
-        )
+        
+        rsc = None
+
+        try:
+            rsc = _get_existing_resource(
+                self.c.get(),
+                volume['name'],
+                volume['id'],
+                error_on_no_resource=False,
+            )
+        except linstor.LinstorError:
+            return True
+
         try:
             rsc.delete(snapshots=False)
         except linstor.LinstorError:
@@ -683,18 +691,18 @@ class LinstorDriver(driver.VolumeDriver):
 
             try:
                 rsc = src.clone(volume['name'], use_zfs_clone=False)
-                
-                expected_size = volume['size'] * units.Gi                 
+
+                expected_size = volume['size'] * units.Gi
                 if rsc.volumes[0].size < expected_size:
                     rsc.volumes[0].size = expected_size
-                    
+
             except linstor.LinstorError:
                 # Ensure we don't have invalid volumes lying around in the backend
                 LOG.exception('Could not clone Linstor volume, '
                               'deleting clone')
                 rsc.delete()
                 raise
-            
+
     @wrap_linstor_api_exception
     @volume_utils.trace
     def copy_image_to_volume(self, context, volume, image_service, image_id,
@@ -1094,7 +1102,7 @@ def _ensure_resource_path(linstor_client, rsc, host, force_udev=True):
     return rsc.volumes[0].device_path
 
 
-def _get_existing_resource(linstor_client, volume_name, volume_id):
+def _get_existing_resource(linstor_client, volume_name, volume_id, error_on_no_resource=True):
     """Get an existing resource matching a cinder volume
 
     :param linstor.Linstor linstor_client: Client used for API calls
@@ -1118,7 +1126,10 @@ def _get_existing_resource(linstor_client, volume_name, volume_id):
 
     msg = _('Found no matching resource in LINSTOR backend for '
             'volume %s') % volume_name
-    raise LinstorDriverException(msg)
+    if error_on_no_resource:
+        raise LinstorDriverException(msg)
+    else:
+        raise linstor.LinstorError(msg)
 
 
 @wrap_linstor_api_exception
