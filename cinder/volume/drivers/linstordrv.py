@@ -675,6 +675,7 @@ class LinstorDriver(driver.VolumeDriver):
 
             self.create_snapshot(clone_snap)
             snapshot.status = fields.SnapshotStatus.AVAILABLE
+            snapshot.save()
 
             volume.source_volid = None
             volume.source_volstatus = None
