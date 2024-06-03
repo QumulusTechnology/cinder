@@ -168,6 +168,8 @@ class LinstorDriver(driver.VolumeDriver):
 
     CI_WIKI_NAME = 'LINBIT_LINSTOR_CI'
 
+    SUPPORTS_ACTIVE_ACTIVE = True
+
     @volume_utils.trace
     def __init__(self, *args, **kwargs):
         super(LinstorDriver, self).__init__(*args, **kwargs)
@@ -532,7 +534,7 @@ class LinstorDriver(driver.VolumeDriver):
         be enforced in Cinder, Linstor just double checks.
         :param cinder.objects.volume.Volume volume: the volume to delete
         """
-        
+
         rsc = None
 
         try:
@@ -546,9 +548,17 @@ class LinstorDriver(driver.VolumeDriver):
             return True
 
         try:
+            rsc.delete(snapshots=True)
+        except linstor.LinstorError:
+            raise exception.VolumeIsBusy(volume_name=volume['name'])
+
+        """The original code didn't delete snapshots however, this was a problem with AutoSnapshot enabled
+        For now I enabled Cinder to auto delete snapshots
+        try:
             rsc.delete(snapshots=False)
         except linstor.LinstorError:
             raise exception.VolumeIsBusy(volume_name=volume['name'])
+        """
 
         try:
             rg = linstor.ResourceGroup(
