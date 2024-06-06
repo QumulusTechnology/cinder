@@ -424,7 +424,7 @@ class LinstorDriver(driver.VolumeDriver):
         redundancy = self._get_linstor_property(
             'redundancy', volume_type,
         )
-        if redundancy and rg.redundancy != redundancy:
+        if redundancy and rg.redundancy != int(redundancy):
             rg.redundancy = redundancy
 
         def make_aux_list(propvalue):
