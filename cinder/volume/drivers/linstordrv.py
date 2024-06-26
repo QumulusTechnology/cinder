@@ -35,6 +35,7 @@ from cinder import interface
 from cinder.volume import configuration
 from cinder.volume import driver
 from cinder.volume import volume_utils
+import requests
 
 try:
     import linstor
@@ -657,6 +658,59 @@ class LinstorBaseDriver(driver.VolumeDriver):
                                           rsc_path,
                                           volume)
 
+
+    def _send_vol_data_to_qcp(self, volume, endpoint):
+        try:
+            data = {
+                'projectID': volume['project_id'],
+                'userID': volume['user_id'],
+                'cinderHost': volume['host'],
+                'volumeID': volume['id'],
+                'volumeName': volume['name'],
+                'volumeDisplayName': volume['display_name'],
+                'volumeTypeID': volume['volume_type_id'],
+                # 'nameID': volume['name_id'],
+                # 'resourceBackend': volume['resource_backend'],
+                # 'serviceTopicQueue': volume['service_topic_queue'],
+            }
+
+            url = "http://127.0.0.1:5555/"+ endpoint
+            response = requests.post(url, json=data)
+
+            print(response.status_code)
+            print(response.raw) 
+
+        except Exception as err:
+            print("error call qcp")
+            print(err)
+
+
+    
+    def _send_snapshot_data_to_qcp(self, snapshot):
+        try:
+            data = {
+                'projectID': snapshot['project_id'],
+                'userID': snapshot['user_id'],
+                'cinderHost': snapshot['host'],
+                'volumeID': snapshot['volume_id'],
+                'snapshotID': snapshot['id'],
+                'snapshotName': snapshot['name'],
+                'snapshotDisplayName': snapshot['display_name'],
+                'volumeTypeID': snapshot['volume_type_id'],
+                # 'resourceBackend': snapshot['resource_backend'],
+                # 'serviceTopicQueue': snapshot['service_topic_queue'],
+            }
+
+            url = "http://127.0.0.1:5555/create-snap"
+            response = requests.post(url, json=data)
+
+            print(response.status_code)
+            print(response.raw) 
+
+        except Exception as err:
+            print("error call qcp when creating snap")
+            print(err)
+
     #
     # Snapshot
     #
@@ -671,6 +725,9 @@ class LinstorBaseDriver(driver.VolumeDriver):
             msg = 'ERROR creating a LINSTOR snapshot {}'.format(snap_name)
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(msg)
+
+        # Calling QCP
+        self._send_snapshot_data_to_qcp(snapshot)
 
     def delete_snapshot(self, snapshot):
         snapshot_name = self._snapshot_name_from_cinder_snapshot(snapshot)
@@ -750,7 +807,11 @@ class LinstorBaseDriver(driver.VolumeDriver):
                 msg = _('Error on extending LINSTOR resource size')
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
+        # Calling QCP
+        self._send_vol_data_to_qcp(volume, 'create-vol-from-snapshot')
 
+        return {}
+    
     def create_volume(self, volume):
 
         # Check for Storage Pool List
@@ -869,6 +930,8 @@ class LinstorBaseDriver(driver.VolumeDriver):
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
 
+        # Calling QCP
+        self._send_vol_data_to_qcp(volume, 'create-vol')
         return {}
 
     def delete_volume(self, volume):
@@ -964,7 +1027,8 @@ class LinstorBaseDriver(driver.VolumeDriver):
                                  self.default_blocksize,
                                  size=volume['size'],
                                  disable_sparse=disable_sparse)
-        return {}
+        # Calling QCP
+        self._send_vol_data_to_qcp(volume, 'create-cloned-vol')
 
     def copy_volume_to_image(self, context, volume, image_service, image_meta):
         full_rsc_name = self._drbd_resource_name_from_cinder_volume(volume)
