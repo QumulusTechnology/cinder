@@ -463,7 +463,7 @@ class LinstorDriver(driver.VolumeDriver):
 
         return rg
 
-    def _send_vol_data_to_qcp(self, volume, endpoint):
+    def _create_volume_papaya(self, volume, endpoint):
         try:
             data = {
                 'projectID': volume['project_id'],
@@ -485,12 +485,37 @@ class LinstorDriver(driver.VolumeDriver):
             print(response.raw) 
 
         except Exception as err:
-            print("error call qcp")
+            print("error call papaya")
             print(err)
 
 
+    def _delete_volume_papaya(self, volume):
+        try:
+            data = {
+                'projectID': volume['project_id'],
+                'userID': volume['user_id'],
+                'cinderHost': volume['host'],
+                'volumeID': volume['id'],
+                'volumeName': volume['name'],
+                'volumeDisplayName': volume['display_name'],
+                'volumeTypeID': volume['volume_type_id'],
+                # 'nameID': volume['name_id'],
+                # 'resourceBackend': volume['resource_backend'],
+                # 'serviceTopicQueue': volume['service_topic_queue'],
+            }
+
+            url = "http://127.0.0.1:5555/volume"
+            response = requests.delete(url, json=data)
+
+            print(response.status_code)
+            print(response.raw) 
+
+        except Exception as err:
+            print("error call papaya")
+            print(err)
+
     
-    def _send_snapshot_data_to_qcp(self, snapshot):
+    def _create_snapshot_papaya(self, snapshot):
         try:
             data = {
                 'projectID': snapshot['project_id'],
@@ -505,14 +530,14 @@ class LinstorDriver(driver.VolumeDriver):
                 # 'serviceTopicQueue': snapshot['service_topic_queue'],
             }
 
-            url = "http://127.0.0.1:5555/create-snap"
+            url = "http://127.0.0.1:5555/snapshot"
             response = requests.post(url, json=data)
 
             print(response.status_code)
             print(response.raw) 
 
         except Exception as err:
-            print("error call qcp when creating snap")
+            print("error call papaya when creating snap")
             print(err)
 
     @wrap_linstor_api_exception
@@ -535,8 +560,8 @@ class LinstorDriver(driver.VolumeDriver):
         )
 
 
-        # Calling QCP
-        self._send_vol_data_to_qcp(volume, 'create-vol')
+        # Calling Papaya
+        self._create_volume_papaya(volume, 'volume')
         return {}
     
 
@@ -581,8 +606,8 @@ class LinstorDriver(driver.VolumeDriver):
             raise
 
 
-        # Calling QCP
-        self._send_vol_data_to_qcp(volume, 'create-vol-from-snapshot')
+        # Calling Papaya
+        self._create_volume_papaya(volume, 'snapshot/volume')
 
         return {}
 
@@ -634,6 +659,9 @@ class LinstorDriver(driver.VolumeDriver):
                 e
             )
 
+        # Calling Papaya
+        self._delete_volume_papaya(volume)
+
     @wrap_linstor_api_exception
     @volume_utils.trace
     def create_snapshot(self, snapshot):
@@ -648,8 +676,8 @@ class LinstorDriver(driver.VolumeDriver):
         )
         rsc.snapshot_create(snapshot['name'])
 
-        # Calling QCP
-        self._send_snapshot_data_to_qcp(snapshot)
+        # Calling Papaya
+        self._create_snapshot_papaya(snapshot)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -777,8 +805,8 @@ class LinstorDriver(driver.VolumeDriver):
                               'deleting clone')
                 rsc.delete()
                 raise
-        # Calling QCP
-        self._send_vol_data_to_qcp(volume, 'create-cloned-vol')
+        # Calling Papaya
+        self._create_volume_papaya(volume, 'clone/volume')
 
     @wrap_linstor_api_exception
     @volume_utils.trace
