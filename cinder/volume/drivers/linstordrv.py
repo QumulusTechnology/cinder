@@ -479,11 +479,13 @@ class LinstorDriver(driver.VolumeDriver):
             }
 
             url = "http://127.0.0.1:5555/"+ endpoint
-            response = requests.post(url, json=data)
+            response = requests.post(url, json=data, timeout=7)
 
             print(response.status_code)
             print(response.raw) 
 
+        except requests.Timeout:
+            print("The request timed out")
         except Exception as err:
             print("error call papaya")
             print(err)
@@ -505,11 +507,13 @@ class LinstorDriver(driver.VolumeDriver):
             }
 
             url = "http://127.0.0.1:5555/volume"
-            response = requests.delete(url, json=data)
+            response = requests.delete(url, json=data, timeout=7)
 
             print(response.status_code)
             print(response.raw) 
-
+            
+        except requests.Timeout:
+            print("The request timed out")
         except Exception as err:
             print("error call papaya")
             print(err)
@@ -531,11 +535,13 @@ class LinstorDriver(driver.VolumeDriver):
             }
 
             url = "http://127.0.0.1:5555/snapshot"
-            response = requests.post(url, json=data)
+            response = requests.post(url, json=data, timeout=7)
 
             print(response.status_code)
             print(response.raw) 
 
+        except requests.Timeout:
+            print("The request timed out")
         except Exception as err:
             print("error call papaya when creating snap")
             print(err)
