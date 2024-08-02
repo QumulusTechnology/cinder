@@ -478,8 +478,8 @@ class LinstorDriver(driver.VolumeDriver):
                 # 'serviceTopicQueue': volume['service_topic_queue'],
             }
 
-            url = "http://127.0.0.1:5555/"+ endpoint
-            response = requests.post(url, json=data, timeout=7)
+            url = "http://127.0.0.1:5050/"+ endpoint
+            response = requests.post(url, json=data, timeout=100)
 
             print(response.status_code)
             print(response.raw) 
@@ -506,8 +506,8 @@ class LinstorDriver(driver.VolumeDriver):
                 # 'serviceTopicQueue': volume['service_topic_queue'],
             }
 
-            url = "http://127.0.0.1:5555/volume"
-            response = requests.delete(url, json=data, timeout=7)
+            url = "http://127.0.0.1:5050/volume"
+            response = requests.delete(url, json=data, timeout=100)
 
             print(response.status_code)
             print(response.raw) 
@@ -534,8 +534,8 @@ class LinstorDriver(driver.VolumeDriver):
                 # 'serviceTopicQueue': snapshot['service_topic_queue'],
             }
 
-            url = "http://127.0.0.1:5555/snapshot"
-            response = requests.post(url, json=data, timeout=7)
+            url = "http://127.0.0.1:5050/snapshot"
+            response = requests.post(url, json=data, timeout=100)
 
             print(response.status_code)
             print(response.raw) 
