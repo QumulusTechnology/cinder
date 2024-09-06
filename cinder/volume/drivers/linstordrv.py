@@ -473,6 +473,7 @@ class LinstorDriver(driver.VolumeDriver):
                 'volumeName': volume['name'],
                 'volumeDisplayName': volume['display_name'],
                 'volumeTypeID': volume['volume_type_id'],
+                'size': volume['size'],
                 # 'nameID': volume['name_id'],
                 # 'resourceBackend': volume['resource_backend'],
                 # 'serviceTopicQueue': volume['service_topic_queue'],
