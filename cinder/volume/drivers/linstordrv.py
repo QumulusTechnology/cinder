@@ -466,17 +466,14 @@ class LinstorDriver(driver.VolumeDriver):
     def _create_volume_papaya(self, volume, endpoint):
         try:
             data = {
-                'projectID': volume['project_id'],
-                'userID': volume['user_id'],
+                'projectId': volume['project_id'],
+                'userId': volume['user_id'],
                 'cinderHost': volume['host'],
-                'volumeID': volume['id'],
+                'volumeId': volume['id'],
                 'volumeName': volume['name'],
                 'volumeDisplayName': volume['display_name'],
-                'volumeTypeID': volume['volume_type_id'],
+                'volumeTypeId': volume['volume_type_id'],
                 'size': volume['size'],
-                # 'nameID': volume['name_id'],
-                # 'resourceBackend': volume['resource_backend'],
-                # 'serviceTopicQueue': volume['service_topic_queue'],
             }
 
             url = "http://127.0.0.1:5050/"+ endpoint
@@ -495,16 +492,13 @@ class LinstorDriver(driver.VolumeDriver):
     def _delete_volume_papaya(self, volume):
         try:
             data = {
-                'projectID': volume['project_id'],
-                'userID': volume['user_id'],
+                'projectId': volume['project_id'],
+                'userId': volume['user_id'],
                 'cinderHost': volume['host'],
-                'volumeID': volume['id'],
+                'volumeId': volume['id'],
                 'volumeName': volume['name'],
                 'volumeDisplayName': volume['display_name'],
-                'volumeTypeID': volume['volume_type_id'],
-                # 'nameID': volume['name_id'],
-                # 'resourceBackend': volume['resource_backend'],
-                # 'serviceTopicQueue': volume['service_topic_queue'],
+                'volumeTypeId': volume['volume_type_id'],
             }
 
             url = "http://127.0.0.1:5050/volume"
@@ -523,16 +517,14 @@ class LinstorDriver(driver.VolumeDriver):
     def _create_snapshot_papaya(self, snapshot):
         try:
             data = {
-                'projectID': snapshot['project_id'],
-                'userID': snapshot['user_id'],
+                'projectId': snapshot['project_id'],
+                'userId': snapshot['user_id'],
                 'cinderHost': snapshot['host'],
-                'volumeID': snapshot['volume_id'],
-                'snapshotID': snapshot['id'],
+                'volumeId': snapshot['volume_id'],
+                'snapshotId': snapshot['id'],
                 'snapshotName': snapshot['name'],
                 'snapshotDisplayName': snapshot['display_name'],
-                'volumeTypeID': snapshot['volume_type_id'],
-                # 'resourceBackend': snapshot['resource_backend'],
-                # 'serviceTopicQueue': snapshot['service_topic_queue'],
+                'volumeTypeId': snapshot['volume_type_id'],
             }
 
             url = "http://127.0.0.1:5050/snapshot"
