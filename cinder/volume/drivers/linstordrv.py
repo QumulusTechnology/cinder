@@ -40,6 +40,7 @@ from cinder.volume import driver
 from cinder.volume.targets import driver as targets
 from cinder.volume import volume_utils
 import requests
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 try:
     import linstor
@@ -463,6 +464,7 @@ class LinstorDriver(driver.VolumeDriver):
 
         return rg
 
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))  # Retries 3 times with a 2-second delay between attempts
     def _create_volume_papaya(self, volume, endpoint):
         try:
             data = {
@@ -476,19 +478,19 @@ class LinstorDriver(driver.VolumeDriver):
                 'size': volume['size'],
             }
 
-            url = "http://127.0.0.1:5050/"+ endpoint
+            url = "http://127.0.0.1:5050/" + endpoint
             response = requests.post(url, json=data, timeout=100)
 
             print(response.status_code)
-            print(response.raw) 
+            print(response.raw)
 
         except requests.Timeout:
             print("The request timed out")
         except Exception as err:
-            print("error call papaya")
+            print("Error calling Papaya")
             print(err)
 
-
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))
     def _delete_volume_papaya(self, volume):
         try:
             data = {
@@ -505,15 +507,15 @@ class LinstorDriver(driver.VolumeDriver):
             response = requests.delete(url, json=data, timeout=100)
 
             print(response.status_code)
-            print(response.raw) 
-            
+            print(response.raw)
+
         except requests.Timeout:
             print("The request timed out")
         except Exception as err:
-            print("error call papaya")
+            print("Error calling Papaya")
             print(err)
 
-    
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))
     def _create_snapshot_papaya(self, snapshot):
         try:
             data = {
@@ -531,12 +533,12 @@ class LinstorDriver(driver.VolumeDriver):
             response = requests.post(url, json=data, timeout=100)
 
             print(response.status_code)
-            print(response.raw) 
+            print(response.raw)
 
         except requests.Timeout:
             print("The request timed out")
         except Exception as err:
-            print("error call papaya when creating snap")
+            print("Error calling Papaya when creating snapshot")
             print(err)
 
     @wrap_linstor_api_exception
