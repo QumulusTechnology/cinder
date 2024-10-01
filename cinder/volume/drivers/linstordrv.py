@@ -499,11 +499,7 @@ class LinstorDriver(driver.VolumeDriver):
             data = {
                 'projectId': volume['project_id'],
                 'userId': volume['user_id'],
-                'cinderHost': volume['host'],
                 'volumeId': volume['id'],
-                'volumeName': volume['name'],
-                'volumeDisplayName': volume['display_name'],
-                'volumeTypeId': volume['volume_type_id'],
             }
 
             url = "http://127.0.0.1:5050/volume"
@@ -549,17 +545,13 @@ class LinstorDriver(driver.VolumeDriver):
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))
     def _delete_snapshot_papaya(self, snapshot):
         LOG.info("Deleting snapshot in Papaya: %s", snapshot['id'])
-        
+
         try:
             data = {
                 'projectId': snapshot['project_id'],
                 'userId': snapshot['user_id'],
-                'cinderHost': snapshot['host'],
                 'volumeId': snapshot['volume_id'],
                 'snapshotId': snapshot['id'],
-                'snapshotName': snapshot['name'],
-                'snapshotDisplayName': snapshot['display_name'],
-                'volumeTypeId': snapshot['volume_type_id'],
             }
 
             url = "http://127.0.0.1:5050/snapshot"
