@@ -466,6 +466,7 @@ class LinstorDriver(driver.VolumeDriver):
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))  # Retries 3 times with a 2-second delay between attempts
     def _create_volume_papaya(self, volume, endpoint):
+        LOG.info("Creating volume in Papaya: %s", volume['id'])
         try:
             data = {
                 'projectId': volume['project_id'],
@@ -481,17 +482,19 @@ class LinstorDriver(driver.VolumeDriver):
             url = "http://127.0.0.1:5050/" + endpoint
             response = requests.post(url, json=data, timeout=100)
 
-            print(response.status_code)
-            print(response.raw)
+            LOG.info("Papaya response: %s", response.status_code)
+            LOG.info(response.raw)
 
         except requests.Timeout:
-            print("The request timed out")
+            LOG.exception("The request timed out")
         except Exception as err:
-            print("Error calling Papaya")
-            print(err)
+            LOG.exception("Error calling Papaya when creating volume")
+            LOG.exception(err)
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))
     def _delete_volume_papaya(self, volume):
+        LOG.info("Deleting volume in Papaya: %s", volume['id'])
+
         try:
             data = {
                 'projectId': volume['project_id'],
@@ -506,17 +509,19 @@ class LinstorDriver(driver.VolumeDriver):
             url = "http://127.0.0.1:5050/volume"
             response = requests.delete(url, json=data, timeout=100)
 
-            print(response.status_code)
-            print(response.raw)
+            LOG.info("Papaya response: %s", response.status_code)
+            LOG.info(response.raw)
 
         except requests.Timeout:
             print("The request timed out")
         except Exception as err:
-            print("Error calling Papaya")
+            print("Error calling Papaya when deleting volume")
             print(err)
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))
     def _create_snapshot_papaya(self, snapshot):
+        LOG.info("Creating snapshot in Papaya: %s", snapshot['id'])
+
         try:
             data = {
                 'projectId': snapshot['project_id'],
@@ -532,14 +537,42 @@ class LinstorDriver(driver.VolumeDriver):
             url = "http://127.0.0.1:5050/snapshot"
             response = requests.post(url, json=data, timeout=100)
 
-            print(response.status_code)
-            print(response.raw)
+            LOG.info("Papaya response: %s", response.status_code)
+            LOG.info(response.raw)
 
         except requests.Timeout:
-            print("The request timed out")
+            LOG.exception("The request timed out")
         except Exception as err:
-            print("Error calling Papaya when creating snapshot")
-            print(err)
+            LOG.exception("Error calling Papaya when creating snapshot")
+            LOG.exception(err)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))
+    def _delete_snapshot_papaya(self, snapshot):
+        LOG.info("Deleting snapshot in Papaya: %s", snapshot['id'])
+        
+        try:
+            data = {
+                'projectId': snapshot['project_id'],
+                'userId': snapshot['user_id'],
+                'cinderHost': snapshot['host'],
+                'volumeId': snapshot['volume_id'],
+                'snapshotId': snapshot['id'],
+                'snapshotName': snapshot['name'],
+                'snapshotDisplayName': snapshot['display_name'],
+                'volumeTypeId': snapshot['volume_type_id'],
+            }
+
+            url = "http://127.0.0.1:5050/snapshot"
+            response = requests.delete(url, json=data, timeout=100)
+
+            LOG.info("Papaya response: %s", response.status_code)
+            LOG.info(response.raw)
+
+        except requests.Timeout:
+            LOG.exception("The request timed out")
+        except Exception as err:
+            LOG.exception("Error calling Papaya when deleting snapshot")
+            LOG.exception(err)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -704,6 +737,10 @@ class LinstorDriver(driver.VolumeDriver):
             rsc.snapshot_delete('SN_' + snapshot['id'])
         except linstor.LinstorError:
             raise exception.SnapshotIsBusy('SN_' + snapshot['id'])
+        
+
+        self._delete_snapshot_papaya(snapshot)
+
 
     @wrap_linstor_api_exception
     @volume_utils.trace
