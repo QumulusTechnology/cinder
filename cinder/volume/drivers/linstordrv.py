@@ -587,7 +587,7 @@ class LinstorDriver(driver.VolumeDriver):
 
 
         # Calling Papaya
-        self._create_volume_papaya(volume, 'volume')
+        # self._create_volume_papaya(volume, 'volume')
         return {}
     
 
@@ -633,7 +633,7 @@ class LinstorDriver(driver.VolumeDriver):
 
 
         # Calling Papaya
-        self._create_volume_papaya(volume, 'snapshot/volume')
+        # self._create_volume_papaya(volume, 'snapshot/volume')
 
         return {}
 
@@ -686,7 +686,7 @@ class LinstorDriver(driver.VolumeDriver):
             )
 
         # Calling Papaya
-        self._delete_volume_papaya(volume)
+        # self._delete_volume_papaya(volume)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -703,7 +703,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc.snapshot_create(snapshot['name'])
 
         # Calling Papaya
-        self._create_snapshot_papaya(snapshot)
+        # self._create_snapshot_papaya(snapshot)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -836,7 +836,7 @@ class LinstorDriver(driver.VolumeDriver):
                 rsc.delete()
                 raise
         # Calling Papaya
-        self._create_volume_papaya(volume, 'clone/volume')
+        # self._create_volume_papaya(volume, 'clone/volume')
 
     @wrap_linstor_api_exception
     @volume_utils.trace
