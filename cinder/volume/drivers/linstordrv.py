@@ -480,27 +480,27 @@ class LinstorDriver(driver.VolumeDriver):
                 'volumeTypeId': volume['volume_type_id'],
                 'size': volume['size'],
             }
-    
+
             url = f"https://127.0.0.1:5050/{endpoint}"  # Use HTTPS
             response = requests.post(url, json=data, timeout=100, verify=False)  # Disable SSL verification
-    
+
             LOG.info("Papaya response: %s", response.status_code)
             LOG.info(response.raw)
             return response.status_code
-    
+
         except Timeout:
             LOG.exception("The request to Papaya timed out")
             return 'timeout_error'
-    
+
         except ConnectionError as conn_err:
             LOG.exception("Failed to connect to Papaya service: %s", conn_err)
             return 'connection_error'
-    
+
         except Exception as err:
             LOG.exception("Error calling Papaya when creating volume")
             LOG.exception(err)
             return 'unknown_error'
-    
+
 
     # Function to delete a volume in Papaya
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))  # Retries 3 times with a 3-second delay between attempts
@@ -625,7 +625,7 @@ class LinstorDriver(driver.VolumeDriver):
 
 
         # Calling Papaya
-        # self._create_volume_papaya(volume, 'volume')
+        self._create_volume_papaya(volume, 'volume')
         return {}
     
 
@@ -671,7 +671,7 @@ class LinstorDriver(driver.VolumeDriver):
 
 
         # Calling Papaya
-        # self._create_volume_papaya(volume, 'snapshot/volume')
+        self._create_volume_papaya(volume, 'snapshot/volume')
 
         return {}
 
@@ -724,7 +724,7 @@ class LinstorDriver(driver.VolumeDriver):
             )
 
         # Calling Papaya
-        # self._delete_volume_papaya(volume)
+        self._delete_volume_papaya(volume)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -741,7 +741,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc.snapshot_create(snapshot['name'])
 
         # Calling Papaya
-        # self._create_snapshot_papaya(snapshot)
+        self._create_snapshot_papaya(snapshot)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -768,7 +768,7 @@ class LinstorDriver(driver.VolumeDriver):
         except linstor.LinstorError:
             raise exception.SnapshotIsBusy('SN_' + snapshot['id'])
         
-
+        # Calling Papaya
         self._delete_snapshot_papaya(snapshot)
 
 
@@ -874,7 +874,7 @@ class LinstorDriver(driver.VolumeDriver):
                 rsc.delete()
                 raise
         # Calling Papaya
-        # self._create_volume_papaya(volume, 'clone/volume')
+        self._create_volume_papaya(volume, 'clone/volume')
 
     @wrap_linstor_api_exception
     @volume_utils.trace
