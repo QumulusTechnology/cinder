@@ -480,27 +480,27 @@ class LinstorDriver(driver.VolumeDriver):
                 'volumeTypeId': volume['volume_type_id'],
                 'size': volume['size'],
             }
-
-            url = f"http://127.0.0.1:5050/{endpoint}"
-            response = requests.post(url, json=data, timeout=100)
-
+    
+            url = f"https://127.0.0.1:5050/{endpoint}"  # Use HTTPS
+            response = requests.post(url, json=data, timeout=100, verify=False)  # Disable SSL verification
+    
             LOG.info("Papaya response: %s", response.status_code)
             LOG.info(response.raw)
             return response.status_code
-
+    
         except Timeout:
             LOG.exception("The request to Papaya timed out")
             return 'timeout_error'
-
+    
         except ConnectionError as conn_err:
             LOG.exception("Failed to connect to Papaya service: %s", conn_err)
             return 'connection_error'
-
+    
         except Exception as err:
             LOG.exception("Error calling Papaya when creating volume")
             LOG.exception(err)
             return 'unknown_error'
-
+    
 
     # Function to delete a volume in Papaya
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))  # Retries 3 times with a 3-second delay between attempts
@@ -513,8 +513,8 @@ class LinstorDriver(driver.VolumeDriver):
                 'volumeId': volume['id'],
             }
 
-            url = "http://127.0.0.1:5050/volume"
-            response = requests.delete(url, json=data, timeout=100)
+            url = "https://127.0.0.1:5050/volume"  # Use HTTPS
+            response = requests.delete(url, json=data, timeout=100, verify=False)  # Disable SSL verification
 
             LOG.info("Papaya response: %s", response.status_code)
             LOG.info(response.raw)
@@ -550,8 +550,8 @@ class LinstorDriver(driver.VolumeDriver):
                 'volumeTypeId': snapshot['volume_type_id'],
             }
 
-            url = "http://127.0.0.1:5050/snapshot"
-            response = requests.post(url, json=data, timeout=100)
+            url = "https://127.0.0.1:5050/snapshot"  # Use HTTPS
+            response = requests.post(url, json=data, timeout=100, verify=False)  # Disable SSL verification
 
             LOG.info("Papaya response: %s", response.status_code)
             LOG.info(response.raw)
@@ -583,8 +583,8 @@ class LinstorDriver(driver.VolumeDriver):
                 'snapshotId': snapshot['id'],
             }
 
-            url = "http://127.0.0.1:5050/snapshot"
-            response = requests.delete(url, json=data, timeout=100)
+            url = "https://127.0.0.1:5050/snapshot"  # Use HTTPS
+            response = requests.delete(url, json=data, timeout=100, verify=False)  # Disable SSL verification
 
             LOG.info("Papaya response: %s", response.status_code)
             LOG.info(response.raw)
