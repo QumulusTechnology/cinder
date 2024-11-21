@@ -1263,6 +1263,31 @@ class VolumeManager(manager.CleanableManager,
             # Pass context so that drivers that want to use it, can,
             # but it is not a requirement for all drivers.
             snapshot.context = context
+            project_id = snapshot.project_id
+
+            # If the snapshot is automated, we don't want to use quota -- added by henry
+            if snapshot.get('metadata') and snapshot['metadata'].get('isAutomatedSnapshot') == 'true':
+                reserve_opts = {'snapshots': -1}
+
+                # Fetch the volume reference from the database
+                volume_ref = self.db.volume_get(context, snapshot['volume_id'])
+
+                # Add volume type quota options (if applicable)
+                QUOTAS.add_volume_type_opts(
+                    context,
+                    reserve_opts,
+                    volume_ref.get('volume_type_id')
+                )
+
+                # Reserve quotas with the given options
+                reservations = QUOTAS.reserve(
+                    context,
+                    project_id=project_id,
+                    **reserve_opts
+                )
+
+                if reservations:
+                    QUOTAS.commit(context, reservations, project_id=project_id)
 
             model_update = self.driver.create_snapshot(snapshot)
             if model_update:
@@ -1375,7 +1400,8 @@ class VolumeManager(manager.CleanableManager,
         # Get reservations
         reservations = None
         try:
-            if snapshot.use_quota:
+            # If the snapshot is automated, we don't want to use quota -- added by henry
+            if snapshot.use_quota and (not snapshot.get('metadata') or snapshot['metadata'].get('isAutomatedSnapshot') != 'true'):
                 if CONF.no_snapshot_gb_quota:
                     reserve_opts = {'snapshots': -1}
                 else:
