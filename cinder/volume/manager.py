@@ -1266,7 +1266,7 @@ class VolumeManager(manager.CleanableManager,
             project_id = snapshot.project_id
 
             # If the snapshot is automated, we don't want to use quota -- added by henry
-            if snapshot.get('metadata') and snapshot['metadata'].get('isAutomated') == 'true':
+            if snapshot.get('metadata') and snapshot['metadata'].get('isAutomatedSnapshot') == 'true':
                 reserve_opts = {'snapshots': -1}
 
                 # Fetch the volume reference from the database
@@ -1401,7 +1401,7 @@ class VolumeManager(manager.CleanableManager,
         reservations = None
         try:
             # If the snapshot is automated, we don't want to use quota -- added by henry
-            if snapshot.use_quota and (not snapshot.get('metadata') or snapshot['metadata'].get('isAutomated') != 'true'):
+            if snapshot.use_quota and (not snapshot.get('metadata') or snapshot['metadata'].get('isAutomatedSnapshot') != 'true'):
                 if CONF.no_snapshot_gb_quota:
                     reserve_opts = {'snapshots': -1}
                 else:
