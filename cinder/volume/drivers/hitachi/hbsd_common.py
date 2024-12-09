@@ -1,4 +1,4 @@
-# Copyright (C) 2020, 2023, Hitachi, Ltd.
+# Copyright (C) 2020, 2024, Hitachi, Ltd.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -14,6 +14,7 @@
 #
 """Common module for Hitachi HBSD Driver."""
 
+from collections import defaultdict
 import json
 import re
 
@@ -29,8 +30,6 @@ from cinder.volume.drivers.hitachi import hbsd_utils as utils
 from cinder.volume import volume_types
 from cinder.volume import volume_utils
 
-_GROUP_NAME_FORMAT_DEFAULT_FC = utils.TARGET_PREFIX + '{wwn}'
-_GROUP_NAME_FORMAT_DEFAULT_ISCSI = utils.TARGET_PREFIX + '{ip}'
 _GROUP_NAME_MAX_LEN_FC = 64
 _GROUP_NAME_MAX_LEN_ISCSI = 32
 
@@ -48,6 +47,8 @@ _GROUP_NAME_VAR_LEN = {GROUP_NAME_VAR_WWN: _GROUP_NAME_VAR_WWN_LEN,
 
 STR_VOLUME = 'volume'
 STR_SNAPSHOT = 'snapshot'
+
+_UUID_PATTERN = re.compile(r'^[\da-f]{32}$')
 
 _INHERITED_VOLUME_OPTS = [
     'volume_backend_name',
@@ -147,27 +148,6 @@ COMMON_NAME_OPTS = [
         help='Format of host groups, iSCSI targets, and server objects.'),
 ]
 
-_GROUP_NAME_FORMAT = {
-    'FC': {
-        'group_name_max_len': _GROUP_NAME_MAX_LEN_FC,
-        'group_name_var_cnt': {
-            GROUP_NAME_VAR_WWN: [1],
-            GROUP_NAME_VAR_IP: [0],
-            GROUP_NAME_VAR_HOST: [0, 1],
-        },
-        'group_name_format_default': _GROUP_NAME_FORMAT_DEFAULT_FC,
-    },
-    'iSCSI': {
-        'group_name_max_len': _GROUP_NAME_MAX_LEN_ISCSI,
-        'group_name_var_cnt': {
-            GROUP_NAME_VAR_WWN: [0],
-            GROUP_NAME_VAR_IP: [1],
-            GROUP_NAME_VAR_HOST: [0, 1],
-        },
-        'group_name_format_default': _GROUP_NAME_FORMAT_DEFAULT_ISCSI,
-    }
-}
-
 CONF = cfg.CONF
 CONF.register_opts(COMMON_VOLUME_OPTS, group=configuration.SHARED_CONF_GROUP)
 CONF.register_opts(COMMON_PORT_OPTS, group=configuration.SHARED_CONF_GROUP)
@@ -217,7 +197,28 @@ class HBSDCommon():
             'portals': {},
         }
         self.storage_id = None
-        self.group_name_format = _GROUP_NAME_FORMAT[driverinfo['proto']]
+        if self.storage_info['protocol'] == 'FC':
+            self.group_name_format = {
+                'group_name_max_len': _GROUP_NAME_MAX_LEN_FC,
+                'group_name_var_cnt': {
+                    GROUP_NAME_VAR_WWN: [1],
+                    GROUP_NAME_VAR_IP: [0],
+                    GROUP_NAME_VAR_HOST: [0, 1],
+                },
+                'group_name_format_default': self.driver_info[
+                    'target_prefix'] + '{wwn}',
+            }
+        if self.storage_info['protocol'] == 'iSCSI':
+            self.group_name_format = {
+                'group_name_max_len': _GROUP_NAME_MAX_LEN_ISCSI,
+                'group_name_var_cnt': {
+                    GROUP_NAME_VAR_WWN: [0],
+                    GROUP_NAME_VAR_IP: [1],
+                    GROUP_NAME_VAR_HOST: [0, 1],
+                },
+                'group_name_format_default': self.driver_info[
+                    'target_prefix'] + '{ip}',
+            }
         self.format_info = {
             'group_name_format': self.group_name_format[
                 'group_name_format_default'],
@@ -348,13 +349,19 @@ class HBSDCommon():
         """Disconnect all volume pairs to which the specified S-VOL belongs."""
         raise NotImplementedError()
 
-    def get_pair_info(self, ldev):
+    def get_pair_info(self, ldev, ldev_info=None):
         """Return volume pair info(LDEV number, pair status and pair type)."""
         raise NotImplementedError()
 
-    def delete_pair(self, ldev):
-        """Disconnect all volume pairs to which the specified LDEV belongs."""
-        pair_info = self.get_pair_info(ldev)
+    def delete_pair(self, ldev, ldev_info=None):
+        """Disconnect all volume pairs to which the specified LDEV belongs.
+
+        :param int ldev: The ID of the LDEV whose TI pair needs be deleted
+        :param dict ldev_info: LDEV info
+        :return: None
+        :raises VolumeDriverException: if the LDEV is a P-VOL of a TI pair
+        """
+        pair_info = self.get_pair_info(ldev, ldev_info)
         if not pair_info:
             return
         if pair_info['pvol'] == ldev:
@@ -385,11 +392,56 @@ class HBSDCommon():
         """Delete the specified LDEV from the storage."""
         raise NotImplementedError()
 
-    def delete_ldev(self, ldev):
-        """Delete the specified LDEV."""
-        self.delete_pair(ldev)
+    def delete_ldev(self, ldev, ldev_info=None):
+        """Delete the specified LDEV.
+
+        :param int ldev: The ID of the LDEV to be deleted
+        :param dict ldev_info: LDEV info
+        :return: None
+        """
+        self.delete_pair(ldev, ldev_info)
         self.unmap_ldev_from_storage(ldev)
         self.delete_ldev_from_storage(ldev)
+
+    def is_invalid_ldev(self, ldev, obj, ldev_info_):
+        """Check if the specified LDEV corresponds to the specified object.
+
+        If the LDEV label and the object's id or name_id do not match, the LDEV
+        was deleted and another LDEV with the same ID was created for another
+        volume or snapshot. In this case, we say that the LDEV is invalid.
+        If the LDEV label is not set or its format is unexpected, we cannot
+        judge if the LDEV corresponds to the object. This can happen if the
+        LDEV was created in older versions of this product or if the user
+        overwrote the label. In this case, we just say that the LDEV is not
+        invalid, although we are not completely sure about it.
+        The reason for using name_id rather than id for volumes in comparison
+        is that id of the volume that corresponds to the LDEV changes by
+        host-assisted migration while that is not the case with name_id and
+        that the LDEV label is created from id of the volume when the LDEV is
+        created and is never changed after that.
+        Because Snapshot objects do not have name_id, we use id instead of
+        name_id if the object is a Snapshot. We assume that the object is a
+        Snapshot object if hasattr(obj, 'name_id') returns False.
+        This method returns False if the LDEV does not exist on the storage.
+        The absence of the LDEV on the storage is detected elsewhere.
+        :param int ldev: The ID of the LDEV to be checked
+        :param obj: The object to be checked
+        :type obj: Volume or Snapshot
+        :param dict ldev_info_: LDEV info. This is an output area. Data is
+        written by this method, but the area must be secured by the caller.
+        :return: True if the LDEV does not correspond to the object, False
+        otherwise
+        :rtype: bool
+        """
+        ldev_info = self.get_ldev_info(None, ldev)
+        # To avoid calling the same REST API multiple times, we pass the LDEV
+        # info to the caller.
+        ldev_info_.update(ldev_info)
+        return ('label' in ldev_info
+                and _UUID_PATTERN.match(ldev_info['label'])
+                and ldev_info['label'] != (
+                    obj.name_id if hasattr(obj, 'name_id') else
+                    obj.id).replace('-', ''))
 
     def delete_volume(self, volume):
         """Delete the specified volume."""
@@ -399,10 +451,20 @@ class HBSDCommon():
                 MSG.INVALID_LDEV_FOR_DELETION,
                 method='delete_volume', id=volume['id'])
             return
+        # Check if the LDEV corresponds to the volume.
+        # To avoid KeyError when accessing a missing attribute, set the default
+        # value to None.
+        ldev_info = defaultdict(lambda: None)
+        if self.is_invalid_ldev(ldev, volume, ldev_info):
+            # If the LDEV is assigned to another object, skip deleting it.
+            self.output_log(MSG.SKIP_DELETING_LDEV, obj='volume',
+                            obj_id=volume.id, ldev=ldev,
+                            ldev_label=ldev_info['label'])
+            return
         try:
-            self.delete_ldev(ldev)
+            self.delete_ldev(ldev, ldev_info)
         except exception.VolumeDriverException as ex:
-            if ex.msg == utils.BUSY_MESSAGE:
+            if utils.BUSY_MESSAGE in ex.msg:
                 raise exception.VolumeIsBusy(volume_name=volume['name'])
             else:
                 raise ex
@@ -424,6 +486,7 @@ class HBSDCommon():
         new_ldev = self.copy_on_storage(
             ldev, size, extra_specs, pool_id, snap_pool_id, ldev_range,
             is_snapshot=True)
+        self.modify_ldev_name(new_ldev, snapshot.id.replace("-", ""))
         return {
             'provider_location': str(new_ldev),
         }
@@ -436,10 +499,20 @@ class HBSDCommon():
                 MSG.INVALID_LDEV_FOR_DELETION, method='delete_snapshot',
                 id=snapshot['id'])
             return
+        # Check if the LDEV corresponds to the snapshot.
+        # To avoid KeyError when accessing a missing attribute, set the default
+        # value to None.
+        ldev_info = defaultdict(lambda: None)
+        if self.is_invalid_ldev(ldev, snapshot, ldev_info):
+            # If the LDEV is assigned to another object, skip deleting it.
+            self.output_log(MSG.SKIP_DELETING_LDEV, obj='snapshot',
+                            obj_id=snapshot.id, ldev=ldev,
+                            ldev_label=ldev_info['label'])
+            return
         try:
-            self.delete_ldev(ldev)
+            self.delete_ldev(ldev, ldev_info)
         except exception.VolumeDriverException as ex:
-            if ex.msg == utils.BUSY_MESSAGE:
+            if utils.BUSY_MESSAGE in ex.msg:
                 raise exception.SnapshotIsBusy(snapshot_name=snapshot['name'])
             else:
                 raise ex
@@ -594,7 +667,7 @@ class HBSDCommon():
         try:
             self.delete_pair(ldev)
         except exception.VolumeDriverException as ex:
-            if ex.msg == utils.BUSY_MESSAGE:
+            if utils.BUSY_MESSAGE in ex.msg:
                 raise exception.VolumeIsBusy(volume_name=volume['name'])
             else:
                 raise ex
@@ -690,7 +763,8 @@ class HBSDCommon():
         if self.conf.hitachi_group_name_format is not None:
             error_flag = False
             if re.match(
-                    utils.TARGET_PREFIX + '(' + GROUP_NAME_VAR_WWN + '|' +
+                    self.driver_info['target_prefix'] + '(' +
+                    GROUP_NAME_VAR_WWN + '|' +
                     GROUP_NAME_VAR_IP + '|' + GROUP_NAME_VAR_HOST + '|' + '[' +
                     GROUP_NAME_ALLOWED_CHARS + '])+$',
                     self.conf.hitachi_group_name_format) is None:
@@ -1103,6 +1177,11 @@ class HBSDCommon():
         """Migrate the specified volume."""
         return False
 
+    def update_migrated_volume(self, new_volume):
+        """Return model update for migrated volume."""
+        return {'_name_id': new_volume.name_id,
+                'provider_location': new_volume.provider_location}
+
     def retype(self, ctxt, volume, new_type, diff, host):
         """Retype the specified volume."""
         return False
@@ -1158,7 +1237,11 @@ class HBSDCommon():
         provider_location = obj.get('provider_location')
         if not provider_location:
             return None
-        if provider_location.isdigit():
+        if provider_location.isdigit() and not getattr(self, 'is_secondary',
+                                                       False):
+            # This format implies that the value is the ID of an LDEV in the
+            # primary storage. Therefore, the secondary instance should not
+            # retrieve this value.
             return int(provider_location)
         if provider_location.startswith('{'):
             loc = json.loads(provider_location)

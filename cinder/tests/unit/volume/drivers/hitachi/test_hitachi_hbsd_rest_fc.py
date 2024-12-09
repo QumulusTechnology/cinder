@@ -1,4 +1,4 @@
-# Copyright (C) 2020, 2023, Hitachi, Ltd.
+# Copyright (C) 2020, 2024, Hitachi, Ltd.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -219,6 +219,29 @@ GET_LDEV_RESULT = {
     "poolId": 30,
     "dataReductionStatus": "DISABLED",
     "dataReductionMode": "disabled",
+    "label": "00000000000000000000000000000000",
+}
+
+GET_LDEV_RESULT_LABEL = {
+    "emulationType": "OPEN-V-CVS",
+    "blockCapacity": 2097152,
+    "attributes": ["CVS", "HDP"],
+    "status": "NML",
+    "poolId": 30,
+    "dataReductionStatus": "DISABLED",
+    "dataReductionMode": "disabled",
+    "label": "00000000000000000000000000000001",
+}
+
+GET_LDEV_RESULT_SNAP = {
+    "emulationType": "OPEN-V-CVS",
+    "blockCapacity": 2097152,
+    "attributes": ["CVS", "HDP"],
+    "status": "NML",
+    "poolId": 30,
+    "dataReductionStatus": "DISABLED",
+    "dataReductionMode": "disabled",
+    "label": "10000000000000000000000000000000",
 }
 
 GET_LDEV_RESULT_MAPPED = {
@@ -241,6 +264,23 @@ GET_LDEV_RESULT_PAIR = {
     "blockCapacity": 2097152,
     "attributes": ["CVS", "HDP", "HTI"],
     "status": "NML",
+    "label": "00000000000000000000000000000000",
+}
+
+GET_LDEV_RESULT_PAIR_SNAP = {
+    "emulationType": "OPEN-V-CVS",
+    "blockCapacity": 2097152,
+    "attributes": ["CVS", "HDP", "HTI"],
+    "status": "NML",
+    "label": "10000000000000000000000000000000",
+}
+
+GET_LDEV_RESULT_PAIR_TEST = {
+    "emulationType": "OPEN-V-CVS",
+    "blockCapacity": 2097152,
+    "attributes": ["CVS", "HDP", "HTI", "111"],
+    "status": "NML",
+    "snapshotPoolId": 0
 }
 
 GET_LDEV_RESULT_PAIR_STATUS_TEST = {
@@ -638,8 +678,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
         self.assertEqual(1, brick_get_connector_properties.call_count)
         self.assertEqual(4, request.call_count)
         # stop the Loopingcall within the do_setup treatment
-        self.driver.common.client.keep_session_loop.stop()
-        self.driver.common.client.keep_session_loop.wait()
+        drv.common.client.keep_session_loop.stop()
 
     @mock.patch.object(requests.Session, "request")
     @mock.patch.object(
@@ -666,8 +705,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
         self.assertEqual(1, brick_get_connector_properties.call_count)
         self.assertEqual(9, request.call_count)
         # stop the Loopingcall within the do_setup treatment
-        self.driver.common.client.keep_session_loop.stop()
-        self.driver.common.client.keep_session_loop.wait()
+        drv.common.client.keep_session_loop.stop()
 
     @mock.patch.object(requests.Session, "request")
     @mock.patch.object(
@@ -695,8 +733,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
         self.assertEqual(1, brick_get_connector_properties.call_count)
         self.assertEqual(9, request.call_count)
         # stop the Loopingcall within the do_setup treatment
-        self.driver.common.client.keep_session_loop.stop()
-        self.driver.common.client.keep_session_loop.wait()
+        drv.common.client.keep_session_loop.stop()
 
     @mock.patch.object(requests.Session, "request")
     @mock.patch.object(
@@ -748,8 +785,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
         self.assertEqual(1, brick_get_connector_properties.call_count)
         self.assertEqual(10, request.call_count)
         # stop the Loopingcall within the do_setup treatment
-        self.driver.common.client.keep_session_loop.stop()
-        self.driver.common.client.keep_session_loop.wait()
+        drv.common.client.keep_session_loop.stop()
 
     @mock.patch.object(requests.Session, "request")
     @mock.patch.object(
@@ -775,8 +811,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
         self.assertEqual(5, request.call_count)
         self.configuration.hitachi_pools = tmp_pools
         # stop the Loopingcall within the do_setup treatment
-        self.driver.common.client.keep_session_loop.stop()
-        self.driver.common.client.keep_session_loop.wait()
+        drv.common.client.keep_session_loop.stop()
 
     @mock.patch.object(requests.Session, "request")
     def test_create_volume(self, request):
@@ -834,7 +869,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
         self.assertEqual(4, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
-    def test_delete_volume_temporary_busy(self, request):
+    def test_delete_volume_wait_copy_pair_deleting(self, request):
         request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_PAIR),
                                FakeResponse(200, GET_SNAPSHOTS_RESULT_BUSY),
                                FakeResponse(200, GET_LDEV_RESULT),
@@ -849,7 +884,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
     @mock.patch('oslo_service.loopingcall.FixedIntervalLoopingCall',
                 new=test_utils.ZeroIntervalLoopingCall)
     @mock.patch.object(requests.Session, "request")
-    def test_delete_volume_busy_timeout(self, request):
+    def test_delete_volume_request_failed(self, request):
         request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_PAIR),
                                FakeResponse(200, GET_SNAPSHOTS_RESULT_BUSY),
                                FakeResponse(200, GET_LDEV_RESULT_PAIR),
@@ -859,6 +894,21 @@ class HBSDRESTFCDriverTest(test.TestCase):
                           self.driver.delete_volume,
                           TEST_VOLUME[0])
         self.assertGreater(request.call_count, 2)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_volume_volume_is_busy(self, request):
+        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_PAIR),
+                               FakeResponse(200, GET_SNAPSHOTS_RESULT_PAIR)]
+        self.assertRaises(exception.VolumeIsBusy,
+                          self.driver.delete_volume,
+                          TEST_VOLUME[0])
+        self.assertEqual(2, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_volume_is_invalid_ldev(self, request):
+        request.return_value = FakeResponse(200, GET_LDEV_RESULT_LABEL)
+        self.driver.delete_volume(TEST_VOLUME[0])
+        self.assertEqual(1, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
     def test_extend_volume(self, request):
@@ -906,6 +956,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
     @mock.patch.object(driver.FibreChannelDriver, "get_goodness_function")
     @mock.patch.object(driver.FibreChannelDriver, "get_filter_function")
     @mock.patch.object(hbsd_rest.HBSDREST, "get_pool_info")
+    @mock.patch.object(requests.Session, 'request', new=mock.MagicMock())
     def test_get_volume_stats_error(
             self, get_pool_info, get_filter_function, get_goodness_function):
         get_pool_info.side_effect = exception.VolumeDriverException(data='')
@@ -939,7 +990,8 @@ class HBSDRESTFCDriverTest(test.TestCase):
         request.side_effect = [FakeResponse(200, GET_LDEV_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
-                               FakeResponse(200, GET_SNAPSHOTS_RESULT)]
+                               FakeResponse(200, GET_SNAPSHOTS_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
         get_volume_type_extra_specs.return_value = {}
         self.driver.common._stats = {}
         self.driver.common._stats['pools'] = [
@@ -947,7 +999,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
         ret = self.driver.create_snapshot(TEST_SNAPSHOT[0])
         self.assertEqual('1', ret['provider_location'])
         self.assertEqual(1, get_volume_type_extra_specs.call_count)
-        self.assertEqual(4, request.call_count)
+        self.assertEqual(5, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
     @mock.patch.object(volume_types, 'get_volume_type_extra_specs')
@@ -957,7 +1009,8 @@ class HBSDRESTFCDriverTest(test.TestCase):
         request.side_effect = [FakeResponse(200, GET_LDEV_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
-                               FakeResponse(200, GET_SNAPSHOTS_RESULT)]
+                               FakeResponse(200, GET_SNAPSHOTS_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
         get_volume_type_extra_specs.return_value = {'hbsd:capacity_saving':
                                                     'disable'}
         self.driver.common._stats = {}
@@ -966,11 +1019,11 @@ class HBSDRESTFCDriverTest(test.TestCase):
         ret = self.driver.create_snapshot(TEST_SNAPSHOT[0])
         self.assertEqual('1', ret['provider_location'])
         self.assertEqual(1, get_volume_type_extra_specs.call_count)
-        self.assertEqual(4, request.call_count)
+        self.assertEqual(5, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
     def test_delete_snapshot(self, request):
-        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_PAIR),
+        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_PAIR_SNAP),
                                FakeResponse(200, NOTFOUND_RESULT),
                                FakeResponse(200, GET_SNAPSHOTS_RESULT),
                                FakeResponse(200, GET_SNAPSHOTS_RESULT),
@@ -990,7 +1043,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
     @mock.patch.object(requests.Session, "request")
     def test_delete_snapshot_no_pair(self, request):
         """Normal case: Delete a snapshot without pair."""
-        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT),
+        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_SNAP),
                                FakeResponse(200, GET_LDEV_RESULT),
                                FakeResponse(200, GET_LDEV_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
@@ -1244,6 +1297,31 @@ class HBSDRESTFCDriverTest(test.TestCase):
         self.assertEqual(2, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
+    def test_unmanage_volume_is_busy(self, request):
+        request.side_effect = [
+            FakeResponse(200, GET_LDEV_RESULT_PAIR),
+            FakeResponse(200, GET_LDEV_RESULT_PAIR),
+            FakeResponse(200, NOTFOUND_RESULT),
+            FakeResponse(200, GET_SNAPSHOTS_RESULT_PAIR),
+        ]
+        self.assertRaises(exception.VolumeIsBusy,
+                          self.driver.unmanage,
+                          TEST_VOLUME[1])
+        self.assertEqual(4, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_unmanage_volume_is_busy_raise_ex(self, request):
+        request.side_effect = [
+            FakeResponse(200, GET_LDEV_RESULT_PAIR),
+            FakeResponse(200, GET_LDEV_RESULT_PAIR),
+            FakeResponse(400, GET_SNAPSHOTS_RESULT_BUSY)
+        ]
+        self.assertRaises(exception.VolumeDriverException,
+                          self.driver.unmanage,
+                          TEST_VOLUME[0])
+        self.assertEqual(3, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
     def test_copy_image_to_volume(self, request):
         image_service = 'fake_image_service'
         image_id = 'fake_image_id'
@@ -1260,14 +1338,12 @@ class HBSDRESTFCDriverTest(test.TestCase):
     @mock.patch.object(requests.Session, "request")
     def test_update_migrated_volume(self, request):
         request.return_value = FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)
-        self.assertRaises(
-            NotImplementedError,
-            self.driver.update_migrated_volume,
-            self.ctxt,
-            TEST_VOLUME[0],
-            TEST_VOLUME[1],
-            "available")
+        ret = self.driver.update_migrated_volume(
+            self.ctxt, TEST_VOLUME[0], TEST_VOLUME[1], "available")
         self.assertEqual(1, request.call_count)
+        actual = ({'_name_id': TEST_VOLUME[1]['id'],
+                   'provider_location': TEST_VOLUME[1]['provider_location']})
+        self.assertEqual(actual, ret)
 
     def test_unmanage_snapshot(self):
         """The driver don't support unmange_snapshot."""
@@ -1471,7 +1547,8 @@ class HBSDRESTFCDriverTest(test.TestCase):
         request.side_effect = [FakeResponse(200, GET_LDEV_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
-                               FakeResponse(200, GET_SNAPSHOTS_RESULT)]
+                               FakeResponse(200, GET_SNAPSHOTS_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
         self.driver.common._stats = {}
         self.driver.common._stats['pools'] = [
             {'location_info': {'pool_id': 30}}]
@@ -1479,7 +1556,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
             self.ctxt, TEST_GROUP_SNAP[0], [TEST_SNAPSHOT[0]]
         )
         self.assertEqual(1, get_volume_type_extra_specs.call_count)
-        self.assertEqual(4, request.call_count)
+        self.assertEqual(5, request.call_count)
         actual = (
             {'status': 'available'},
             [{'id': TEST_SNAPSHOT[0]['id'],
@@ -1499,6 +1576,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
         get_volume_type_extra_specs.return_value = {}
         request.side_effect = [FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
                                FakeResponse(200, GET_SNAPSHOTS_RESULT_PAIR),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
                                FakeResponse(200, GET_SNAPSHOTS_RESULT)]
@@ -1509,7 +1587,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
             self.ctxt, TEST_GROUP_SNAP[0], [TEST_SNAPSHOT[0]]
         )
         self.assertEqual(1, get_volume_type_extra_specs.call_count)
-        self.assertEqual(5, request.call_count)
+        self.assertEqual(6, request.call_count)
         actual = (
             None,
             [{'id': TEST_SNAPSHOT[0]['id'],
@@ -1520,7 +1598,7 @@ class HBSDRESTFCDriverTest(test.TestCase):
 
     @mock.patch.object(requests.Session, "request")
     def test_delete_group_snapshot(self, request):
-        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_PAIR),
+        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_PAIR_SNAP),
                                FakeResponse(200, NOTFOUND_RESULT),
                                FakeResponse(200, GET_SNAPSHOTS_RESULT),
                                FakeResponse(200, GET_SNAPSHOTS_RESULT),

@@ -1,4 +1,4 @@
-# Copyright (C) 2022, 2023, Hitachi, Ltd.
+# Copyright (C) 2022, 2024, Hitachi, Ltd.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -141,19 +141,20 @@ def _volume_get(context, volume_id):
 
 
 TEST_SNAPSHOT = []
-snapshot = {}
-snapshot['id'] = '10000000-0000-0000-0000-{0:012d}'.format(0)
-snapshot['name'] = 'TEST_SNAPSHOT{0:d}'.format(0)
-snapshot['provider_location'] = '{0:d}'.format(1)
-snapshot['status'] = 'available'
-snapshot['volume_id'] = '00000000-0000-0000-0000-{0:012d}'.format(0)
-snapshot['volume'] = _volume_get(None, snapshot['volume_id'])
-snapshot['volume_name'] = 'test-volume{0:d}'.format(0)
-snapshot['volume_size'] = 128
-snapshot = obj_snap.Snapshot._from_db_object(
-    CTXT, obj_snap.Snapshot(),
-    fake_snapshot.fake_db_snapshot(**snapshot))
-TEST_SNAPSHOT.append(snapshot)
+for i in range(2):
+    snapshot = {}
+    snapshot['id'] = '10000000-0000-0000-0000-{0:012d}'.format(i)
+    snapshot['name'] = 'TEST_SNAPSHOT{0:d}'.format(i)
+    snapshot['provider_location'] = '{0:d}'.format(i + 1)
+    snapshot['status'] = 'available'
+    snapshot['volume_id'] = '00000000-0000-0000-0000-{0:012d}'.format(i)
+    snapshot['volume'] = _volume_get(None, snapshot['volume_id'])
+    snapshot['volume_name'] = 'test-volume{0:d}'.format(i)
+    snapshot['volume_size'] = 128
+    snapshot = obj_snap.Snapshot._from_db_object(
+        CTXT, obj_snap.Snapshot(),
+        fake_snapshot.fake_db_snapshot(**snapshot))
+    TEST_SNAPSHOT.append(snapshot)
 
 TEST_GROUP = []
 for i in range(2):
@@ -270,6 +271,29 @@ GET_LDEV_RESULT = {
     "poolId": 30,
     "dataReductionStatus": "DISABLED",
     "dataReductionMode": "disabled",
+    "label": "00000000000000000000000000000000",
+}
+
+GET_LDEV_RESULT_SPLIT = {
+    "emulationType": "OPEN-V-CVS",
+    "blockCapacity": 2097152,
+    "attributes": ["CVS", "HDP"],
+    "status": "NML",
+    "poolId": 30,
+    "dataReductionStatus": "DISABLED",
+    "dataReductionMode": "disabled",
+    "label": "00000000000000000000000000000004",
+}
+
+GET_LDEV_RESULT_LABEL = {
+    "emulationType": "OPEN-V-CVS",
+    "blockCapacity": 2097152,
+    "attributes": ["CVS", "HDP"],
+    "status": "NML",
+    "poolId": 30,
+    "dataReductionStatus": "DISABLED",
+    "dataReductionMode": "disabled",
+    "label": "00000000000000000000000000000001",
 }
 
 GET_LDEV_RESULT_MAPPED = {
@@ -307,6 +331,7 @@ GET_LDEV_RESULT_PAIR = {
     "blockCapacity": 2097152,
     "attributes": ["CVS", "HDP", "HTI"],
     "status": "NML",
+    "label": "10000000000000000000000000000000",
 }
 
 GET_LDEV_RESULT_REP = {
@@ -315,6 +340,16 @@ GET_LDEV_RESULT_REP = {
     "attributes": ["CVS", "HDP", "GAD"],
     "status": "NML",
     "numOfPorts": 1,
+    "label": "00000000000000000000000000000004",
+}
+
+GET_LDEV_RESULT_REP_LABEL = {
+    "emulationType": "OPEN-V-CVS",
+    "blockCapacity": 2097152,
+    "attributes": ["CVS", "HDP", "GAD"],
+    "status": "NML",
+    "numOfPorts": 1,
+    "label": "00000000000000000000000000000001",
 }
 
 GET_POOL_RESULT = {
@@ -367,6 +402,18 @@ GET_SNAPSHOTS_RESULT_BUSY = {
             "primaryOrSecondary": "P-VOL",
             "status": "PSUP",
             "pvolLdevId": 0,
+            "muNumber": 1,
+            "svolLdevId": 1,
+        },
+    ],
+}
+
+GET_SNAPSHOTS_RESULT_TEST = {
+    "data": [
+        {
+            "primaryOrSecondary": "S-VOL",
+            "status": "PSUS",
+            "pvolLdevId": 1,
             "muNumber": 1,
             "svolLdevId": 1,
         },
@@ -773,10 +820,8 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
              self.configuration.hitachi_mirror_pair_target_number),
             drv.common.rep_secondary._PAIR_TARGET_NAME)
         # stop the Loopingcall within the do_setup treatment
-        self.driver.common.rep_primary.client.keep_session_loop.stop()
-        self.driver.common.rep_primary.client.keep_session_loop.wait()
-        self.driver.common.rep_secondary.client.keep_session_loop.stop()
-        self.driver.common.rep_secondary.client.keep_session_loop.wait()
+        drv.common.rep_primary.client.keep_session_loop.stop()
+        drv.common.rep_secondary.client.keep_session_loop.stop()
         self._setup_config()
 
     @mock.patch.object(requests.Session, "request")
@@ -878,18 +923,41 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
                             self.ldev_count = self.ldev_count + 1
                             return FakeResponse(200, GET_LDEV_RESULT_REP)
                         else:
-                            return FakeResponse(200, GET_LDEV_RESULT)
+                            return FakeResponse(200, GET_LDEV_RESULT_SPLIT)
             else:
                 if method in ('POST', 'PUT', 'DELETE'):
                     return FakeResponse(202, REMOTE_COMPLETED_SUCCEEDED_RESULT)
                 elif method == 'GET':
                     if '/ldevs/' in url:
-                        return FakeResponse(200, GET_LDEV_RESULT)
+                        return FakeResponse(200, GET_LDEV_RESULT_SPLIT)
             return FakeResponse(
                 500, ERROR_RESULT, headers={'Content-Type': 'json'})
         request.side_effect = _request_side_effect
         self.driver.delete_volume(TEST_VOLUME[4])
         self.assertEqual(17, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_volume_primary_is_invalid_ldev(self, request):
+        request.return_value = FakeResponse(200, GET_LDEV_RESULT_LABEL)
+        self.driver.delete_volume(TEST_VOLUME[0])
+        self.assertEqual(1, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_volume_primary_secondary_is_invalid_ldev(self, request):
+        request.return_value = FakeResponse(200, GET_LDEV_RESULT_REP_LABEL)
+        self.driver.delete_volume(TEST_VOLUME[4])
+        self.assertEqual(2, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_volume_secondary_is_invalid_ldev(self, request):
+        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_REP_LABEL),
+                               FakeResponse(200, GET_LDEV_RESULT_REP),
+                               FakeResponse(200, GET_LDEV_RESULT_REP),
+                               FakeResponse(200, GET_LDEV_RESULT_REP),
+                               FakeResponse(200, GET_LDEV_RESULT_REP),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
+        self.driver.delete_volume(TEST_VOLUME[4])
+        self.assertEqual(6, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
     def test_extend_volume(self, request):
@@ -968,7 +1036,8 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
         request.side_effect = [FakeResponse(200, GET_LDEV_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
-                               FakeResponse(200, GET_SNAPSHOTS_RESULT)]
+                               FakeResponse(200, GET_SNAPSHOTS_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
         self.driver.common.rep_primary._stats = {}
         self.driver.common.rep_primary._stats['pools'] = [
             {'location_info': {'pool_id': 30}}]
@@ -978,7 +1047,7 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
         ret = self.driver.create_snapshot(TEST_SNAPSHOT[0])
         actual = {'provider_location': '1'}
         self.assertEqual(actual, ret)
-        self.assertEqual(4, request.call_count)
+        self.assertEqual(5, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
     def test_delete_snapshot(self, request):
@@ -998,6 +1067,23 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
         self.driver.delete_snapshot(TEST_SNAPSHOT[0])
         self.assertEqual(14, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_snapshot_pldev_in_loc(self, request):
+        self.assertRaises(exception.VolumeDriverException,
+                          self.driver.delete_snapshot,
+                          TEST_SNAPSHOT[1])
+        self.assertEqual(1, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_snapshot_snapshot_is_busy(self, request):
+        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_PAIR),
+                               FakeResponse(200, NOTFOUND_RESULT),
+                               FakeResponse(200, GET_SNAPSHOTS_RESULT_TEST)]
+        self.assertRaises(exception.SnapshotIsBusy,
+                          self.driver.delete_snapshot,
+                          TEST_SNAPSHOT[0])
+        self.assertEqual(3, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
     @mock.patch.object(volume_types, 'get_volume_type')
@@ -1233,6 +1319,14 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
         self.assertEqual(3, request.call_count)
 
     @mock.patch.object(requests.Session, "request")
+    def test_unmanage_has_rep_pair_true(self, request):
+        request.return_value = FakeResponse(200, GET_LDEV_RESULT_REP)
+        self.assertRaises(exception.VolumeDriverException,
+                          self.driver.unmanage,
+                          TEST_VOLUME[4])
+        self.assertEqual(1, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
     def test_copy_image_to_volume(self, request):
         image_service = 'fake_image_service'
         image_id = 'fake_image_id'
@@ -1250,15 +1344,25 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
     @mock.patch.object(requests.Session, "request")
     def test_update_migrated_volume(self, request):
         request.side_effect = [FakeResponse(200, GET_LDEV_RESULT),
-                               FakeResponse(200, COMPLETED_SUCCEEDED_RESULT)]
-        self.assertRaises(
-            NotImplementedError,
-            self.driver.update_migrated_volume,
-            self.ctxt,
-            TEST_VOLUME[0],
-            TEST_VOLUME[1],
-            "available")
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
+        ret = self.driver.update_migrated_volume(
+            self.ctxt, TEST_VOLUME[0], TEST_VOLUME[1], "available")
         self.assertEqual(2, request.call_count)
+        actual = ({'_name_id': TEST_VOLUME[1]['id'],
+                   'provider_location': TEST_VOLUME[1]['provider_location']})
+        self.assertEqual(actual, ret)
+
+    @mock.patch.object(requests.Session, "request")
+    def test_update_migrated_volume_replication(self, request):
+        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT_REP),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
+        ret = self.driver.update_migrated_volume(
+            self.ctxt, TEST_VOLUME[0], TEST_VOLUME[4], "available")
+        self.assertEqual(3, request.call_count)
+        actual = ({'_name_id': TEST_VOLUME[4]['id'],
+                   'provider_location': TEST_VOLUME[4]['provider_location']})
+        self.assertEqual(actual, ret)
 
     def test_unmanage_snapshot(self):
         """The driver don't support unmange_snapshot."""
@@ -1411,6 +1515,39 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
     @mock.patch.object(requests.Session, "request")
     @mock.patch.object(volume_types, 'get_volume_type')
     @mock.patch.object(volume_types, 'get_volume_type_extra_specs')
+    def test_create_group_from_src_Exception(
+            self, get_volume_type_extra_specs, get_volume_type, request):
+        extra_specs = {"test1": "aaa"}
+        get_volume_type_extra_specs.return_value = extra_specs
+        get_volume_type.return_value = {}
+        request.side_effect = [FakeResponse(200, GET_LDEV_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
+                               FakeResponse(200, GET_SNAPSHOTS_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
+                               FakeResponse(200, GET_LDEV_RESULT),
+                               FakeResponse(200, GET_LDEV_RESULT),
+                               FakeResponse(200, GET_LDEV_RESULT),
+                               FakeResponse(200, GET_LDEV_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
+        self.driver.common.rep_primary._stats = {}
+        self.driver.common.rep_primary._stats['pools'] = [
+            {'location_info': {'pool_id': 30}}]
+        self.driver.common.rep_secondary._stats = {}
+        self.driver.common.rep_secondary._stats['pools'] = [
+            {'location_info': {'pool_id': 40}}]
+        self.assertRaises(exception.VolumeDriverException,
+                          self.driver.create_group_from_src,
+                          self.ctxt, TEST_GROUP[1],
+                          [TEST_VOLUME[1], TEST_VOLUME[1]],
+                          source_group=TEST_GROUP[0],
+                          source_vols=[TEST_VOLUME[0], TEST_VOLUME[3]]
+                          )
+        self.assertEqual(10, request.call_count)
+
+    @mock.patch.object(requests.Session, "request")
+    @mock.patch.object(volume_types, 'get_volume_type')
+    @mock.patch.object(volume_types, 'get_volume_type_extra_specs')
     def test_create_group_from_src_snapshot(
             self, get_volume_type_extra_specs, get_volume_type, request):
         extra_specs = {"test1": "aaa"}
@@ -1458,7 +1595,8 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
         request.side_effect = [FakeResponse(200, GET_LDEV_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
                                FakeResponse(202, COMPLETED_SUCCEEDED_RESULT),
-                               FakeResponse(200, GET_SNAPSHOTS_RESULT)]
+                               FakeResponse(200, GET_SNAPSHOTS_RESULT),
+                               FakeResponse(202, COMPLETED_SUCCEEDED_RESULT)]
         self.driver.common.rep_primary._stats = {}
         self.driver.common.rep_primary._stats['pools'] = [
             {'location_info': {'pool_id': 30}}]
@@ -1468,7 +1606,7 @@ class HBSDMIRRORFCDriverTest(test.TestCase):
         ret = self.driver.create_group_snapshot(
             self.ctxt, TEST_GROUP_SNAP[0], [TEST_SNAPSHOT[0]]
         )
-        self.assertEqual(4, request.call_count)
+        self.assertEqual(5, request.call_count)
         actual = (
             {'status': 'available'},
             [{'id': TEST_SNAPSHOT[0]['id'],
