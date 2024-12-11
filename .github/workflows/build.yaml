@@ -117,22 +117,22 @@ jobs:
           CWD="$(pwd)"
           sudo mkdir -p /etc/kolla
           sudo bash -c "cat << EOF > /etc/kolla/kolla-build.conf
-
           [DEFAULT]
           base = ubuntu
           base_tag = ${BASE_OS_TAG}
-          namespace = kolla
+          namespace = ${BRANCH}
           push = true
           skip_existing = false
           threads = 16
           push_threads = 4
           registry = ${REPO_ADDRESS}/kolla
           install_type = source
-          tag = ${TAG}
+          tag = latest
           template_override = /etc/kolla/template-overrides.j2
           openstack_release = ${OPENSTACK_VERSION}
           docker_healthchecks = true
           network_mode = host
+
           [${REPOSITORY}-base]
           type = local
           location = ${CWD}
@@ -163,11 +163,8 @@ jobs:
       - name: Tag and push docker images
         run: |
           timestamp=$(date +%Y%m%d%H%M%S)
-          for i in $(docker images --format '{{.Repository}}' | grep "/${TAG}/"); do
+          for i in $(docker images --format '{{.Repository}}' | grep "/${BRANCH}/"); do
             image=${i##*/}
-            docker tag ${i}:${TAG} ${REPO_ADDRESS}/kolla/${image}:${TAG}_${timestamp}
-            if [ "${TAG}" == "main" ]; then
-              docker tag ${i}:${TAG} ${REPO_ADDRESS}/kolla/${image}:latest
-            fi
+            docker tag ${i}:latest ${REPO_ADDRESS}/kolla/${BRANCH}/${image}:${timestamp}
             docker image push --all-tags ${i}
           done
