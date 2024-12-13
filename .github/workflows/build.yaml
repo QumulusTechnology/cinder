@@ -148,10 +148,12 @@ jobs:
           {% endblock %}
 
           {% block ${REPOSITORY}_base_footer %}
+          {% endblock %}
 
-          apt update && \
-          apt install --no-install-recommends -y nvme-cli
-
+          {% block cinder_volume_footer %}
+          RUN apt update && \
+          apt install --no-install-recommends -y nvme-cli && \
+          pip install python-linstor
           {% endblock %}
           EOF'
 
