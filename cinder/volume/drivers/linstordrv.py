@@ -39,9 +39,7 @@ from cinder.volume import configuration
 from cinder.volume import driver
 from cinder.volume.targets import driver as targets
 from cinder.volume import volume_utils
-import requests
-from requests.exceptions import Timeout, ConnectionError
-from tenacity import retry, stop_after_attempt, wait_fixed
+
 try:
     import linstor
 except ImportError:
@@ -169,8 +167,6 @@ class LinstorDriver(driver.VolumeDriver):
     VERSION = '2.0.0'
 
     CI_WIKI_NAME = 'LINBIT_LINSTOR_CI'
-
-    SUPPORTS_ACTIVE_ACTIVE = True
 
     @volume_utils.trace
     def __init__(self, *args, **kwargs):
@@ -426,7 +422,7 @@ class LinstorDriver(driver.VolumeDriver):
         redundancy = self._get_linstor_property(
             'redundancy', volume_type,
         )
-        if redundancy and rg.redundancy != int(redundancy):
+        if redundancy and rg.redundancy != redundancy:
             rg.redundancy = redundancy
 
         def make_aux_list(propvalue):
@@ -464,146 +460,6 @@ class LinstorDriver(driver.VolumeDriver):
 
         return rg
 
-
-    # Function to create a volume in Papaya
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))  # Retries 3 times with a 3-second delay between attempts
-    def _create_volume_papaya(self, volume, endpoint):
-        LOG.info("Creating volume in Papaya: %s", volume['id'])
-        try:
-            data = {
-                'projectId': volume['project_id'],
-                'userId': volume['user_id'],
-                'cinderHost': volume['host'],
-                'volumeId': volume['id'],
-                'volumeName': volume['name'],
-                'volumeDisplayName': volume['display_name'],
-                'volumeTypeId': volume['volume_type_id'],
-                'size': volume['size'],
-            }
-
-            url = f"http://127.0.0.1:5050/{endpoint}"
-            response = requests.post(url, json=data, timeout=100)
-
-            LOG.info("Papaya response: %s", response.status_code)
-            LOG.info(response.raw)
-            return response.status_code
-
-        except Timeout:
-            LOG.exception("The request to Papaya timed out")
-            return 'timeout_error'
-
-        except ConnectionError as conn_err:
-            LOG.exception("Failed to connect to Papaya service: %s", conn_err)
-            return 'connection_error'
-
-        except Exception as err:
-            LOG.exception("Error calling Papaya when creating volume")
-            LOG.exception(err)
-            return 'unknown_error'
-
-
-    # Function to delete a volume in Papaya
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))  # Retries 3 times with a 3-second delay between attempts
-    def _delete_volume_papaya(self, volume):
-        LOG.info("Deleting volume in Papaya: %s", volume['id'])
-        try:
-            data = {
-                'projectId': volume['project_id'],
-                'userId': volume['user_id'],
-                'volumeId': volume['id'],
-            }
-
-            url = "http://127.0.0.1:5050/volume"
-            response = requests.delete(url, json=data, timeout=100)
-
-            LOG.info("Papaya response: %s", response.status_code)
-            LOG.info(response.raw)
-            return response.status_code
-
-        except Timeout:
-            LOG.exception("The request to Papaya timed out")
-            return 'timeout_error'
-
-        except ConnectionError as conn_err:
-            LOG.exception("Failed to connect to Papaya service: %s", conn_err)
-            return 'connection_error'
-
-        except Exception as err:
-            LOG.exception("Error calling Papaya when deleting volume")
-            LOG.exception(err)
-            return 'unknown_error'
-
-
-    # Function to create a snapshot in Papaya
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))  # Retries 3 times with a 3-second delay between attempts
-    def _create_snapshot_papaya(self, snapshot):
-        LOG.info("Creating snapshot in Papaya: %s", snapshot['id'])
-        try:
-            data = {
-                'projectId': snapshot['project_id'],
-                'userId': snapshot['user_id'],
-                'cinderHost': snapshot['host'],
-                'volumeId': snapshot['volume_id'],
-                'snapshotId': snapshot['id'],
-                'snapshotName': snapshot['name'],
-                'snapshotDisplayName': snapshot['display_name'],
-                'volumeTypeId': snapshot['volume_type_id'],
-            }
-
-            url = "http://127.0.0.1:5050/snapshot"
-            response = requests.post(url, json=data, timeout=100)
-
-            LOG.info("Papaya response: %s", response.status_code)
-            LOG.info(response.raw)
-            return response.status_code
-
-        except Timeout:
-            LOG.exception("The request to Papaya timed out")
-            return 'timeout_error'
-
-        except ConnectionError as conn_err:
-            LOG.exception("Failed to connect to Papaya service: %s", conn_err)
-            return 'connection_error'
-
-        except Exception as err:
-            LOG.exception("Error calling Papaya when creating snapshot")
-            LOG.exception(err)
-            return 'unknown_error'
-
-
-    # Function to delete a snapshot in Papaya
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))  # Retries 3 times with a 3-second delay between attempts
-    def _delete_snapshot_papaya(self, snapshot):
-        LOG.info("Deleting snapshot in Papaya: %s", snapshot['id'])
-        try:
-            data = {
-                'projectId': snapshot['project_id'],
-                'userId': snapshot['user_id'],
-                'volumeId': snapshot['volume_id'],
-                'snapshotId': snapshot['id'],
-            }
-
-            url = "http://127.0.0.1:5050/snapshot"
-            response = requests.delete(url, json=data, timeout=100)
-
-            LOG.info("Papaya response: %s", response.status_code)
-            LOG.info(response.raw)
-            return response.status_code
-
-        except Timeout:
-            LOG.exception("The request to Papaya timed out")
-            return 'timeout_error'
-
-        except ConnectionError as conn_err:
-            LOG.exception("Failed to connect to Papaya service: %s", conn_err)
-            return 'connection_error'
-
-        except Exception as err:
-            LOG.exception("Error calling Papaya when deleting snapshot")
-            LOG.exception(err)
-            return 'unknown_error'
-
-
     @wrap_linstor_api_exception
     @volume_utils.trace
     def create_volume(self, volume):
@@ -623,11 +479,7 @@ class LinstorDriver(driver.VolumeDriver):
             existing_client=self.c.get(),
         )
 
-
-        # Calling Papaya
-        self._create_volume_papaya(volume, 'volume')
         return {}
-    
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -669,10 +521,6 @@ class LinstorDriver(driver.VolumeDriver):
             rsc.delete()
             raise
 
-
-        # Calling Papaya
-        self._create_volume_papaya(volume, 'snapshot/volume')
-
         return {}
 
     @wrap_linstor_api_exception
@@ -684,31 +532,15 @@ class LinstorDriver(driver.VolumeDriver):
         be enforced in Cinder, Linstor just double checks.
         :param cinder.objects.volume.Volume volume: the volume to delete
         """
-
-        rsc = None
-
-        try:
-            rsc = _get_existing_resource(
-                self.c.get(),
-                volume['name'],
-                volume['id'],
-                error_on_no_resource=False,
-            )
-        except linstor.LinstorError:
-            return True
-
-        try:
-            rsc.delete(snapshots=True)
-        except linstor.LinstorError:
-            raise exception.VolumeIsBusy(volume_name=volume['name'])
-
-        """The original code didn't delete snapshots however, this was a problem with AutoSnapshot enabled
-        For now I enabled Cinder to auto delete snapshots
+        rsc = _get_existing_resource(
+            self.c.get(),
+            volume['name'],
+            volume['id'],
+        )
         try:
             rsc.delete(snapshots=False)
         except linstor.LinstorError:
             raise exception.VolumeIsBusy(volume_name=volume['name'])
-        """
 
         try:
             rg = linstor.ResourceGroup(
@@ -723,9 +555,6 @@ class LinstorDriver(driver.VolumeDriver):
                 e
             )
 
-        # Calling Papaya
-        self._delete_volume_papaya(volume)
-
     @wrap_linstor_api_exception
     @volume_utils.trace
     def create_snapshot(self, snapshot):
@@ -739,9 +568,6 @@ class LinstorDriver(driver.VolumeDriver):
             snapshot['volume_id'],
         )
         rsc.snapshot_create(snapshot['name'])
-
-        # Calling Papaya
-        self._create_snapshot_papaya(snapshot)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -767,10 +593,6 @@ class LinstorDriver(driver.VolumeDriver):
             rsc.snapshot_delete('SN_' + snapshot['id'])
         except linstor.LinstorError:
             raise exception.SnapshotIsBusy('SN_' + snapshot['id'])
-        
-
-        self._delete_snapshot_papaya(snapshot)
-
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -845,7 +667,6 @@ class LinstorDriver(driver.VolumeDriver):
 
             self.create_snapshot(clone_snap)
             snapshot.status = fields.SnapshotStatus.AVAILABLE
-            snapshot.save()
 
             volume.source_volid = None
             volume.source_volstatus = None
@@ -854,27 +675,13 @@ class LinstorDriver(driver.VolumeDriver):
 
             return self.create_volume_from_snapshot(volume, snapshot)
         else:
-            src = _get_existing_resource(
+            rsc = _get_existing_resource(
                 self.c.get(),
                 src_vref['name'],
                 src_vref['id'],
             )
-
-            try:
-                rsc = src.clone(volume['name'], use_zfs_clone=False)
-
-                expected_size = volume['size'] * units.Gi
-                if rsc.volumes[0].size < expected_size:
-                    rsc.volumes[0].size = expected_size
-
-            except linstor.LinstorError:
-                # Ensure we don't have invalid volumes lying around in the backend
-                LOG.exception('Could not clone Linstor volume, '
-                              'deleting clone')
-                rsc.delete()
-                raise
-        # Calling Papaya
-        self._create_volume_papaya(volume, 'clone/volume')
+            rsc.clone(volume['name'], use_zfs_clone=False)
+            return {}
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -1275,7 +1082,7 @@ def _ensure_resource_path(linstor_client, rsc, host, force_udev=True):
     return rsc.volumes[0].device_path
 
 
-def _get_existing_resource(linstor_client, volume_name, volume_id, error_on_no_resource=True):
+def _get_existing_resource(linstor_client, volume_name, volume_id):
     """Get an existing resource matching a cinder volume
 
     :param linstor.Linstor linstor_client: Client used for API calls
@@ -1299,10 +1106,7 @@ def _get_existing_resource(linstor_client, volume_name, volume_id, error_on_no_r
 
     msg = _('Found no matching resource in LINSTOR backend for '
             'volume %s') % volume_name
-    if error_on_no_resource:
-        raise LinstorDriverException(msg)
-    else:
-        raise linstor.LinstorError(msg)
+    raise LinstorDriverException(msg)
 
 
 @wrap_linstor_api_exception
