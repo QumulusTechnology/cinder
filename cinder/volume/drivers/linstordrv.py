@@ -168,6 +168,8 @@ class LinstorDriver(driver.VolumeDriver):
 
     CI_WIKI_NAME = 'LINBIT_LINSTOR_CI'
 
+    SUPPORTS_ACTIVE_ACTIVE = True
+
     @volume_utils.trace
     def __init__(self, *args, **kwargs):
         super(LinstorDriver, self).__init__(*args, **kwargs)
@@ -422,7 +424,7 @@ class LinstorDriver(driver.VolumeDriver):
         redundancy = self._get_linstor_property(
             'redundancy', volume_type,
         )
-        if redundancy and rg.redundancy != redundancy:
+        if redundancy and rg.redundancy != int(redundancy):
             rg.redundancy = redundancy
 
         def make_aux_list(propvalue):
