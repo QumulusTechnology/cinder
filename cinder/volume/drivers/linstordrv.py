@@ -40,6 +40,9 @@ from cinder.volume import driver
 from cinder.volume.targets import driver as targets
 from cinder.volume import volume_utils
 
+import time
+from oslo_utils import timeutils
+
 try:
     import linstor
 except ImportError:
@@ -489,8 +492,7 @@ class LinstorDriver(driver.VolumeDriver):
         """Create a new volume from a snapshot
 
         :param cinder.objects.volume.Volume volume: The new volume to create
-        :param cinder.objects.snapshot.Snapshot snapshot: snapshot to restore
-         from
+        :param cinder.objects.snapshot.Snapshot snapshot: snapshot to restore from
         :return: update for the volume model
         :rtype: dict
         """
@@ -512,16 +514,34 @@ class LinstorDriver(driver.VolumeDriver):
             leftover_rsc.delete()
             raise
 
-        try:
-            expected_size = volume['size'] * units.Gi
-            if rsc.volumes[0].size < expected_size:
-                rsc.volumes[0].size = expected_size
-        except linstor.LinstorError:
-            # Ensure we don't have invalid volumes lying around in the backend
-            LOG.exception('Could not resize restored Linstor volume, '
-                          'deleting volume')
-            rsc.delete()
-            raise
+        # Add timeout mechanism
+        start_time = timeutils.utcnow()
+        timeout = 180  # 3 minutes timeout
+        retry_interval = 1  # Check every 5 seconds
+
+        while True:
+            try:
+                expected_size = volume['size'] * units.Gi
+                # Check if volume is available and needs resize
+                if rsc.volumes and rsc.volumes[0].size < expected_size:
+                    rsc.volumes[0].size = expected_size
+                    break
+                elif rsc.volumes:  # Volume exists and size is correct
+                    break
+            except linstor.LinstorError as e:
+                # Check if we've exceeded the timeout
+                if timeutils.delta_seconds(start_time, timeutils.utcnow()) > timeout:
+                    LOG.error('Timeout waiting for volume to become available for resize: %s', e)
+                    rsc.delete()
+                    raise
+
+                LOG.debug('Volume not ready yet, retrying in %s seconds...', retry_interval)
+                time.sleep(retry_interval)
+                continue
+            except Exception as e:
+                LOG.exception('Unexpected error while resizing Linstor volume')
+                rsc.delete()
+                raise
 
         return {}
 
