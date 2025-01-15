@@ -40,6 +40,9 @@ from cinder.volume import driver
 from cinder.volume.targets import driver as targets
 from cinder.volume import volume_utils
 
+import time
+from oslo_utils import timeutils
+
 try:
     import linstor
 except ImportError:
@@ -489,8 +492,7 @@ class LinstorDriver(driver.VolumeDriver):
         """Create a new volume from a snapshot
 
         :param cinder.objects.volume.Volume volume: The new volume to create
-        :param cinder.objects.snapshot.Snapshot snapshot: snapshot to restore
-         from
+        :param cinder.objects.snapshot.Snapshot snapshot: snapshot to restore from
         :return: update for the volume model
         :rtype: dict
         """
@@ -512,16 +514,34 @@ class LinstorDriver(driver.VolumeDriver):
             leftover_rsc.delete()
             raise
 
-        try:
-            expected_size = volume['size'] * units.Gi
-            if rsc.volumes[0].size < expected_size:
-                rsc.volumes[0].size = expected_size
-        except linstor.LinstorError:
-            # Ensure we don't have invalid volumes lying around in the backend
-            LOG.exception('Could not resize restored Linstor volume, '
-                          'deleting volume')
-            rsc.delete()
-            raise
+        # Add timeout mechanism
+        start_time = timeutils.utcnow()
+        timeout = 180  # 3 minutes timeout
+        retry_interval = 1  # Check every 5 seconds
+
+        while True:
+            try:
+                expected_size = volume['size'] * units.Gi
+                # Check if volume is available and needs resize
+                if rsc.volumes and rsc.volumes[0].size < expected_size:
+                    rsc.volumes[0].size = expected_size
+                    break
+                elif rsc.volumes:  # Volume exists and size is correct
+                    break
+            except linstor.LinstorError as e:
+                # Check if we've exceeded the timeout
+                if timeutils.delta_seconds(start_time, timeutils.utcnow()) > timeout:
+                    LOG.error('Timeout waiting for volume to become available for resize: %s', e)
+                    rsc.delete()
+                    raise
+
+                LOG.debug('Volume not ready yet, retrying in %s seconds...', retry_interval)
+                time.sleep(retry_interval)
+                continue
+            except Exception as e:
+                LOG.exception('Unexpected error while resizing Linstor volume')
+                rsc.delete()
+                raise
 
         return {}
 
@@ -728,39 +748,65 @@ class LinstorDriver(driver.VolumeDriver):
                                        volume,
                                        compress=True)
 
+
+
+
     @wrap_linstor_api_exception
     @volume_utils.trace
     def _update_volume_stats(self):
-        """Refresh the Cinder storage pool statistics for scheduling decisions
-
-        We just aggregate all (per-node) storage pools as a total capacity,
-        even if that does clash with how replicated volumes are using these
-        storage pools.
+        """Refresh the Cinder storage pool statistics for scheduling decisions.
+        
+        Safely handles cases where nodes are down by checking for None values
+        in storage pool capacities. Aggregates all (per-node) storage pools as 
+        a total capacity, even if that clashes with how replicated volumes are 
+        using these storage pools.
         """
-
         with self.c.get() as lclient:
-            storage_pools = lclient.storage_pool_list_raise() \
-                .storage_pools
-            resource_dfns = lclient.resource_dfn_list_raise() \
-                .resource_definitions
+            storage_pools = lclient.storage_pool_list_raise().storage_pools
+            resource_dfns = lclient.resource_dfn_list_raise().resource_definitions
 
-        storage_pools = [sp for sp in storage_pools if
-                         not sp.is_diskless()]
+        def _safe_get_capacity(storage_pool, attr):
+            """Safely get capacity value from storage pool.
+            
+            Args:
+                storage_pool: Storage pool object
+                attr: Attribute to get ('total_capacity' or 'free_capacity')
+                
+            Returns:
+                int: Capacity value or 0 if unavailable
+            """
+            try:
+                if storage_pool.free_space is None:
+                    return 0
+                value = getattr(storage_pool.free_space, attr)
+                return value if value is not None else 0
+            except AttributeError:
+                return 0
+        
+        # Filter out diskless storage pools
+        storage_pools = [sp for sp in storage_pools if not sp.is_diskless()]
 
-        backend_name = self.configuration.volume_backend_name or \
-            self._linstor_uri_str
+        backend_name = self.configuration.volume_backend_name or self._linstor_uri_str
 
+        # Safely calculate capacities
         tot = _kib_to_gib(sum(
-            p.free_space.total_capacity for p in storage_pools
+            _safe_get_capacity(p, 'total_capacity') for p in storage_pools
         ))
+        
         free = _kib_to_gib(sum(
-            p.free_space.free_capacity for p in storage_pools
+            _safe_get_capacity(p, 'free_capacity') for p in storage_pools
         ))
+
+        # Calculate provisioned capacity with None check
         provisioned_cap = _kib_to_gib(sum(
-            vd.size for rd in resource_dfns for vd in rd.volume_definitions
+            vd.size for rd in resource_dfns 
+            for vd in rd.volume_definitions 
+            if hasattr(vd, 'size') and vd.size is not None
         ))
-        thin = any(p.is_thin() for p in storage_pools)
-        fat = any(not p.is_fat() for p in storage_pools)
+
+        # Check storage pool properties
+        thin = any(p.is_thin() for p in storage_pools if hasattr(p, 'is_thin'))
+        fat = any(not p.is_fat() for p in storage_pools if hasattr(p, 'is_fat'))
         volumes_in_pool = len(resource_dfns)
 
         self._stats = {
@@ -769,10 +815,7 @@ class LinstorDriver(driver.VolumeDriver):
             'driver_version': self.get_version(),
             'storage_protocol': self.protocol,
             'location_info': self._linstor_uri_str,
-            # Multiattach works in case of ISCSI, as the backing volume
-            # is only opened on the cinder host.
             'multiattach': not self._use_direct_connection(),
-            # nova does not support resizing local volumes
             'online_extend_support': not self._use_direct_connection(),
             'total_capacity_gb': tot,
             'provisioned_capacity_gb': provisioned_cap,
@@ -786,7 +829,7 @@ class LinstorDriver(driver.VolumeDriver):
         }
 
         return self._stats
-
+        
     @wrap_linstor_api_exception
     @volume_utils.trace
     def extend_volume(self, volume, new_size):
