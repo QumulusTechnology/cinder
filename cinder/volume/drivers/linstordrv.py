@@ -508,7 +508,7 @@ class LinstorDriver(driver.VolumeDriver):
             )
         except linstor.LinstorError:
             leftover_rsc = linstor.Resource(
-                volume['name'] ,
+                volume['name'] + "-temp",
                 existing_client=self.c.get(),
             )
             leftover_rsc.delete()
