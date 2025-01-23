@@ -493,64 +493,102 @@ class LinstorDriver(driver.VolumeDriver):
     @volume_utils.trace
     def create_volume_from_snapshot(self, volume, snapshot):
         """Creates new volume from a snapshot.
-
+        
         Creates temporary UUID-based resource, restores snapshot to it, resizes if needed,
         then clones to final volume unless using linked clones.
-
+        
         Args:
             volume (cinder.objects.volume.Volume): Volume to create
             snapshot (cinder.objects.snapshot.Snapshot): Source snapshot
-
+            
         Returns:
             dict: Empty model update dict
-
+            
         Raises:
             linstor.LinstorError: If restore/resize/clone fails
             Exception: For other errors during volume creation
         """
-
-        use_linked_clone = volume.get('metadata', {}).get('useLinkedClone') == 'true'
-        volume_name = volume['name'] if use_linked_clone else ("volume-" + str(uuid.uuid4()))
-
-        src = _get_existing_resource(
-            self.c.get(),
-            snapshot['volume']['name'],
-        )
-
-        try:
-            rsc = _restore_snapshot_to_new_resource(src, snapshot, volume_name)
+        def wait_for_volume_resize(resource, expected_size, timeout=720):
+            """Wait for volume resize operation to complete.
             
+            Args:
+                resource: Linstor resource
+                expected_size: Target size in bytes
+                timeout: Maximum wait time in seconds
+                
+            Returns:
+                bool: True if resize successful
+                
+            Raises:
+                linstor.LinstorError: If timeout occurs or resize fails
+            """
             start_time = timeutils.utcnow()
             while True:
                 try:
-                    expected_size = volume['size'] * units.Gi
-                    if rsc.volumes and rsc.volumes[0].size < expected_size:
-                        rsc.volumes[0].size = expected_size
-                        break
-                    elif rsc.volumes:
-                        break
+                    if not resource.volumes:
+                        time.sleep(0.5)
+                        continue
+                        
+                    current_size = resource.volumes[0].size
+                    if current_size >= expected_size:
+                        return True
+                        
+                    resource.volumes[0].size = expected_size
+                    return True
+                    
                 except linstor.LinstorError as e:
-                    if timeutils.delta_seconds(start_time, timeutils.utcnow()) > 720:
-                        LOG.error('Timeout waiting for volume: %s', e)
-                        rsc.delete()
+                    if timeutils.delta_seconds(start_time, timeutils.utcnow()) > timeout:
+                        LOG.error('Timeout waiting for volume resize: %s', e)
                         raise
                     time.sleep(0.5)
 
+        def cleanup_resource(resource_name):
+            """Safely delete a Linstor resource if it exists."""
+            try:
+                resource = linstor.Resource(resource_name, existing_client=self.c.get())
+                resource.delete(snapshots=True)
+                LOG.debug('Cleaned up resource: %s', resource_name)
+            except linstor.LinstorError as e:
+                LOG.warning('Failed to cleanup resource %s: %s', resource_name, e)
+
+        use_linked_clone = volume.get('metadata', {}).get('useLinkedClone') == 'true'
+        volume_name = volume['name'] if use_linked_clone else f"volume-{uuid.uuid4()}"
+        temp_resources = []
+
+        try:
+            # Get source resource
+            src = _get_existing_resource(self.c.get(), snapshot['volume']['name'])
+            LOG.debug('Found source resource for snapshot: %s', src.name)
+
+            # Restore snapshot
+            rsc = _restore_snapshot_to_new_resource(src, snapshot, volume_name)
+            temp_resources.append(volume_name)
+            LOG.debug('Restored snapshot to resource: %s', volume_name)
+
+            # Resize if needed
+            expected_size = volume['size'] * units.Gi
+            wait_for_volume_resize(rsc, expected_size)
+            LOG.debug('Volume resize completed successfully')
+
             if not use_linked_clone:
+                # Create independent clone
                 volume['snapshot_id'] = None
                 volume.save()
+                
                 new_rsc = _get_existing_resource(self.c.get(), volume_name)
                 new_rsc.clone(volume['name'], use_zfs_clone=False)
-                new_rsc.delete(snapshots=True)
+                LOG.debug('Created independent clone: %s', volume['name'])
+                
+                cleanup_resource(volume_name)
+                temp_resources.remove(volume_name)
 
             return {}
-        except Exception:
-            if not use_linked_clone:
-                try:
-                    leftover_rsc = linstor.Resource(volume_name, existing_client=self.c.get())
-                    leftover_rsc.delete()
-                except linstor.LinstorError:
-                    pass
+
+        except Exception as e:
+            LOG.error('Failed to create volume from snapshot: %s', e)
+            # Cleanup any temporary resources
+            for resource_name in temp_resources:
+                cleanup_resource(resource_name)
             raise
 
     @wrap_linstor_api_exception
