@@ -624,7 +624,8 @@ class LinstorDriver(driver.VolumeDriver):
 
         try:
             rsc.snapshot_delete(snapshot['name'])
-        except linstor.LinstorErrorr as error:            raise exception.SnapshotIsBusy(snapshot['name'])
+        except linstor.LinstorErrorr:            
+            raise exception.SnapshotIsBusy(snapshot['name'])
 
         return {}   
 
