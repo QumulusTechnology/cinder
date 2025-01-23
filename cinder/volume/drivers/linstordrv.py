@@ -512,13 +512,6 @@ class LinstorDriver(driver.VolumeDriver):
         use_linked_clone = volume.get('metadata', {}).get('useLinkedClone') == 'true'
         volume_name = volume['name'] if use_linked_clone else ("volume-" + str(uuid.uuid4()))
 
-        try:
-            if not use_linked_clone:
-                leftover_rsc = linstor.Resource(volume_name, existing_client=self.c.get())
-                leftover_rsc.delete()
-        except linstor.LinstorError:
-            pass
-
         src = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
@@ -1161,8 +1154,7 @@ def _restore_snapshot_to_new_resource(resource, snap, restore_name):
     try:
         return resource.restore_from_snapshot(snap['name'], restore_name)
     except linstor.LinstorError:
-        LOG.info('failed to restore snapshot, retrying with fallback id')
-        return resource.restore_from_snapshot('SN_' + snap['id'], restore_name)
+        raise
 
 
 @wrap_linstor_api_exception
