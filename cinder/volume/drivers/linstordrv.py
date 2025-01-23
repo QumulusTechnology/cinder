@@ -501,19 +501,28 @@ class LinstorDriver(driver.VolumeDriver):
             snapshot['volume']['name'],
             snapshot['volume_id'],
         )
+        volume_name = volume['name'] + "-temp"
+        volume_id = volume['id'] + "-temp"
+        use_linked_clone = False
+        if volume['metadata'] and (volume['metadata']['useLinkedClone'] == 'true'):
+            use_linked_clone = True
+            volume_name = volume['name']
+            volume_id = volume['id']
 
         try:
             rsc = _restore_snapshot_to_new_resource(
-                src, snapshot, volume['name'],
+                src, snapshot, volume_name,
             )
         except linstor.LinstorError:
             leftover_rsc = linstor.Resource(
-                volume['name'],
+                volume_name,
                 existing_client=self.c.get(),
             )
             leftover_rsc.delete()
             raise
 
+        
+        
         # Add timeout mechanism
         start_time = timeutils.utcnow()
         timeout = 180  # 3 minutes timeout
@@ -542,6 +551,20 @@ class LinstorDriver(driver.VolumeDriver):
                 LOG.exception('Unexpected error while resizing Linstor volume')
                 rsc.delete()
                 raise
+        
+
+
+        if use_linked_clone is False:
+            volume['snapshot_id'] = None
+            volume.save()
+            
+            new_rsc = _get_existing_resource(
+                self.c.get(),
+                volume_name,
+                volume_id,
+            )
+            new_rsc.clone(volume['name'], use_zfs_clone=False)
+            new_rsc.delete(snapshots=True)
 
         return {}
 
@@ -606,15 +629,10 @@ class LinstorDriver(driver.VolumeDriver):
 
         try:
             rsc.snapshot_delete(snapshot['name'])
-        except linstor.LinstorError:
+        except linstor.LinstorError:            
             raise exception.SnapshotIsBusy(snapshot['name'])
 
-        try:
-            # This could _also_ be a snapshot created by the v1 driver, so
-            # delete it as well
-            rsc.snapshot_delete('SN_' + snapshot['id'])
-        except linstor.LinstorError:
-            raise exception.SnapshotIsBusy('SN_' + snapshot['id'])
+        return {}   
 
     @wrap_linstor_api_exception
     @volume_utils.trace
