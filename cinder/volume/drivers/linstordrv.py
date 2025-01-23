@@ -501,14 +501,21 @@ class LinstorDriver(driver.VolumeDriver):
             snapshot['volume']['name'],
             snapshot['volume_id'],
         )
+        volume_name = volume['name'] + "-temp"
+        volume_id = volume['id'] + "-temp"
+        use_linked_clone = False
+        if volume['metadata'] and (volume['metadata']['useLinkedClone'] == 'true'):
+            use_linked_clone = True
+            volume_name = volume['name']
+            volume_id = volume['id']
 
         try:
             rsc = _restore_snapshot_to_new_resource(
-                src, snapshot, volume['name'] + "-temp",
+                src, snapshot, volume_name,
             )
         except linstor.LinstorError:
             leftover_rsc = linstor.Resource(
-                volume['name'] + "-temp",
+                volume_name,
                 existing_client=self.c.get(),
             )
             leftover_rsc.delete()
@@ -545,9 +552,7 @@ class LinstorDriver(driver.VolumeDriver):
                 rsc.delete()
                 raise
         
-        use_linked_clone = False
-        if volume['metadata'] and (volume['metadata']['useLinkedClone'] == 'true'):
-            use_linked_clone = True
+
 
         if use_linked_clone is False:
             volume['snapshot_id'] = None
@@ -555,12 +560,12 @@ class LinstorDriver(driver.VolumeDriver):
             
             new_rsc = _get_existing_resource(
                 self.c.get(),
-                volume['name'] + "-temp",
-                volume['id'] + "-temp",
+                volume_name,
+                volume_id,
             )
             new_rsc.clone(volume['name'], use_zfs_clone=False)
             new_rsc.delete(snapshots=True)
-            
+
         return {}
 
     @wrap_linstor_api_exception
@@ -624,7 +629,7 @@ class LinstorDriver(driver.VolumeDriver):
 
         try:
             rsc.snapshot_delete(snapshot['name'])
-        except linstor.LinstorErrorr:            
+        except linstor.LinstorError:            
             raise exception.SnapshotIsBusy(snapshot['name'])
 
         return {}   
