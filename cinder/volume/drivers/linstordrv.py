@@ -1234,43 +1234,75 @@ def _get_existing_resource(linstor_client, volume_name):
 @wrap_linstor_api_exception
 def _restore_snapshot_to_new_resource(resource, snap, restore_name):
     """Restore snapshot with storage driver checks."""
-    LOG.info("Starting snapshot restore process")
-
-    def get_storage_info():
-        with resource.client as lclient:
-            resp = lclient.volume_list_raise(
-                filter_by_resources=[resource.name]
-            )
-            for res in resp.resources:
-                for vol in res.volumes:
-                    LOG.info("Storage info - Node: %s, Pool: %s, Driver: %s", 
-                            res.node_name,
-                            vol.storage_pool_name,
-                            vol.properties.get('StorDriver', 'unknown'))
-                    return vol.properties.get('StorDriver', '')
-        return None
-
-    storage_driver = get_storage_info()
-    LOG.info("Source volume using storage driver: %s", storage_driver)
-
+    LOG.info("Starting snapshot restore process for %s from snapshot %s", restore_name, snap['name'])
+    
     with resource.client as lclient:
-        # Get storage pool info
-        pools = lclient.storage_pool_list_raise().storage_pools
-        LOG.info("Available storage pools:")
-        for pool in pools:
-            LOG.info("Pool: %s, Driver: %s", pool.name, 
-                     pool.properties.get('StorDriver', 'unknown'))
-
+        # Get source volume info
+        LOG.debug("Fetching source volume info for %s", resource.name)
+        src_resp = lclient.volume_list_raise(
+            filter_by_resources=[resource.name]
+        )
+        if not src_resp.resources:
+            LOG.error("Source resource %s not found", resource.name)
+            raise linstor.LinstorError("Source resource not found")
+            
+        src_vol = src_resp.resources[0].volumes[0]
+        src_pool = src_vol.storage_pool_name
+        LOG.info("Source volume details - Size: %s, Pool: %s", src_vol.size, src_pool)
+        
+        # Clean up any existing resource
+        LOG.debug("Checking for existing resource: %s", restore_name)
         cleanup_existing(restore_name, lclient)
         
-        LOG.info("Attempting restore from snapshot %s to %s", 
-                 snap['name'], restore_name)
+        # Create new resource definition
+        LOG.info("Creating resource definition: %s", restore_name)
+        lclient.resource_dfn_create(restore_name)
+        LOG.debug("Resource definition created successfully")
+        
+        # Create volume definition
+        LOG.info("Creating volume definition - Size: %s, Pool: %s", src_vol.size, src_pool)
+        lclient.volume_dfn_create(
+            restore_name,
+            src_vol.size,
+            storage_pool=src_pool
+        )
+        LOG.debug("Volume definition created successfully")
+        
+        # Deploy resource to nodes
+        nodes = lclient.node_list_raise().nodes
+        LOG.info("Deploying resource to %d nodes", len(nodes))
+        for node in nodes:
+            LOG.debug("Deploying to node: %s", node.name)
+            lclient.resource_create(
+                node.name,
+                restore_name,
+                storage_pool=src_pool
+            )
+        
+        LOG.info("Waiting for resource deployment...")
+        time.sleep(5)
+        
+        # Verify resource creation
+        verify_resp = lclient.volume_list_raise(
+            filter_by_resources=[restore_name]
+        )
+        if verify_resp.resources:
+            LOG.info("Resource created successfully with %d volumes", 
+                    len(verify_resp.resources[0].volumes))
+        
+        LOG.info("Attempting snapshot restore: %s -> %s", snap['name'], restore_name)
         try:
-            restored = resource.restore_from_snapshot(snap['name'], restore_name)
+            restored = resource.restore_from_snapshot(
+                snap['name'], 
+                restore_name
+            )
             if not restored.defined:
+                LOG.error("Restore failed - resource not defined after restore")
                 raise linstor.LinstorError("Restore failed - resource not defined")
-            time.sleep(5)  # Wait for storage setup
+                
+            LOG.info("Snapshot restore completed successfully")
             return restored
+            
         except linstor.LinstorError as e:
             LOG.error("Restore failed: %s", e)
             raise
