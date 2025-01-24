@@ -40,8 +40,6 @@ from cinder.volume import driver
 from cinder.volume.targets import driver as targets
 from cinder.volume import volume_utils
 import uuid
-import time
-from oslo_utils import timeutils
 
 import time
 from oslo_utils import timeutils
@@ -508,9 +506,9 @@ class LinstorDriver(driver.VolumeDriver):
             linstor.LinstorError: If restore/resize/clone fails
             Exception: For other errors during volume creation
         """
-
+        
         use_linked_clone = volume.get('metadata', {}).get('useLinkedClone') == 'true'
-        volume_name = volume['name'] if use_linked_clone else ("volume-" + str(uuid.uuid4()))
+        volume_name = volume['id'] if use_linked_clone else str(uuid.uuid4())
 
         try:
             if not use_linked_clone:
@@ -522,6 +520,7 @@ class LinstorDriver(driver.VolumeDriver):
         src = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
+            snapshot['volume_id'],
         )
 
         try:
@@ -537,16 +536,16 @@ class LinstorDriver(driver.VolumeDriver):
                     elif rsc.volumes:
                         break
                 except linstor.LinstorError as e:
-                    if timeutils.delta_seconds(start_time, timeutils.utcnow()) > 720:
+                    if timeutils.delta_seconds(start_time, timeutils.utcnow()) > 180:
                         LOG.error('Timeout waiting for volume: %s', e)
                         rsc.delete()
                         raise
-                    time.sleep(0.5)
+                    time.sleep(1)
 
             if not use_linked_clone:
                 volume['snapshot_id'] = None
                 volume.save()
-                new_rsc = _get_existing_resource(self.c.get(), volume_name)
+                new_rsc = _get_existing_resource(self.c.get(), volume_name, volume_name)
                 new_rsc.clone(volume['name'], use_zfs_clone=False)
                 new_rsc.delete(snapshots=True)
 
@@ -572,6 +571,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
+            volume['id'],
         )
         try:
             rsc.delete(snapshots=False)
@@ -601,6 +601,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
+            snapshot['volume_id'],
         )
         rsc.snapshot_create(snapshot['name'])
 
@@ -614,6 +615,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
+            snapshot['volume_id'],
         )
 
         try:
@@ -639,6 +641,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
+            snapshot['volume_id'],
         )
         try:
             rsc.snapshot_rollback(snapshot['name'])
@@ -706,6 +709,7 @@ class LinstorDriver(driver.VolumeDriver):
             rsc = _get_existing_resource(
                 self.c.get(),
                 src_vref['name'],
+                src_vref['id'],
             )
             rsc.clone(volume['name'], use_zfs_clone=False)
             return {}
@@ -714,7 +718,8 @@ class LinstorDriver(driver.VolumeDriver):
     @volume_utils.trace
     def copy_image_to_volume(self, context, volume, image_service, image_id,
                              disable_sparse=False):
-        rsc = _get_existing_resource(self.c.get(), volume['name'])
+        rsc = _get_existing_resource(self.c.get(), volume['name'],
+                                     volume['id'])
 
         with _temp_resource_path(self.c.get(), rsc, self._hostname,
                                  self._force_udev) as path:
@@ -735,6 +740,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
+            volume['id'],
         )
 
         with _temp_resource_path(self.c.get(), rsc, self._hostname,
@@ -839,6 +845,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
+            volume['id'],
         )
 
         rsc.volumes[0].size = new_size * units.Gi
@@ -858,6 +865,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
+            volume['id'],
         )
 
         with self.c.get() as lclient:
@@ -906,6 +914,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
+            volume['id'],
         )
         volume_path = None
         if not self._use_direct_connection():
@@ -923,6 +932,7 @@ class LinstorDriver(driver.VolumeDriver):
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
+            volume['id'],
         )
         volume_path = None
         if not self._use_direct_connection():
@@ -953,6 +963,7 @@ class LinstorDriver(driver.VolumeDriver):
             rsc = _get_existing_resource(
                 self.c.get(),
                 volume['name'],
+                volume['id'],
             )
             rsc.deactivate(self._hostname)
 
@@ -1038,6 +1049,7 @@ class LinstorDirectTarget(targets.Target):
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
+            volume['id']
         )
 
         if connector['host'] not in _attached_on(volume):
@@ -1065,6 +1077,7 @@ class LinstorDirectTarget(targets.Target):
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
+            volume['id']
         )
 
         if connector is None:
@@ -1123,7 +1136,7 @@ def _ensure_resource_path(linstor_client, rsc, host, force_udev=True):
     return rsc.volumes[0].device_path
 
 
-def _get_existing_resource(linstor_client, volume_name):
+def _get_existing_resource(linstor_client, volume_name, volume_id):
     """Get an existing resource matching a cinder volume
 
     :param linstor.Linstor linstor_client: Client used for API calls
@@ -1138,6 +1151,12 @@ def _get_existing_resource(linstor_client, volume_name):
     if plain_rsc.defined:
         LOG.debug('Found matching resource named: %s', plain_rsc.name)
         return plain_rsc
+
+    alt_name = "CV_" + volume_id
+    alt_rsc = linstor.Resource(alt_name, existing_client=linstor_client)
+    if alt_rsc.defined:
+        LOG.debug('Found matching resource named: %s', alt_rsc.name)
+        return alt_rsc
 
     msg = _('Found no matching resource in LINSTOR backend for '
             'volume %s') % volume_name
