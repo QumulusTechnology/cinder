@@ -1233,81 +1233,22 @@ def _get_existing_resource(linstor_client, volume_name):
 
 @wrap_linstor_api_exception
 def _restore_snapshot_to_new_resource(resource, snap, restore_name):
-    """Restore snapshot with DRBD handling."""
-    LOG.info("Starting snapshot restore process")
-    
-    def wait_for_drbd_available(node_name, timeout=30):
-        LOG.info("Checking DRBD availability on node: %s", node_name)
-        start_time = timeutils.utcnow()
-        while True:
-            try:
-                with resource.client as lclient:
-                    node = lclient.node_list_raise(
-                        filter_by_nodes=[node_name]
-                    ).nodes[0]
-                    
-                    drbd_module = node.properties.get('DrbdModule')
-                    LOG.debug("DRBD module state: %s", drbd_module)
-                    
-                    if drbd_module and drbd_module != 'Error':
-                        LOG.info("DRBD module ready on node: %s", node_name)
-                        return True
-                        
-            except (IndexError, linstor.LinstorError) as e:
-                LOG.warning("DRBD check failed: %s", e)
-                if timeutils.delta_seconds(start_time, timeutils.utcnow()) > timeout:
-                    LOG.error("DRBD not available after timeout")
-                    return False
-            time.sleep(1)
-    
-    def cleanup_existing():
-        LOG.info("Checking for existing resource: %s", restore_name)
-        try:
-            existing = linstor.Resource(restore_name, existing_client=resource.client)
-            if existing.defined:
-                LOG.info("Deleting existing resource")
-                existing.delete()
-                time.sleep(2)  # Wait for cleanup
-        except linstor.LinstorError as e:
-            LOG.debug("No existing resource found: %s", e)
+    """Try restoring a snapshot to a new resource
 
-    # Get target node information
-    with resource.client as lclient:
-        nodes = lclient.node_list_raise().nodes
-        
-    if not nodes:
-        raise linstor.LinstorError("No nodes available")
-        
-    target_node = nodes[0].name
-    LOG.info("Target node for restore: %s", target_node)
-
-    # Check DRBD availability
-    if not wait_for_drbd_available(target_node):
-        raise linstor.LinstorError("DRBD not available on target node")
-
-    # Clean existing and attempt restore
-    cleanup_existing()
-    
-    max_retries = 3
-    retry_delay = 5
-    
-    for attempt in range(max_retries):
-        try:
-            LOG.info("Attempting restore - attempt %d/%d", attempt + 1, max_retries)
-            restored = resource.restore_from_snapshot(snap['name'], restore_name)
-            
-            if not restored.defined:
-                raise linstor.LinstorError("Restore failed - resource not defined")
-                
-            LOG.info("Restore succeeded - allowing time for DRBD setup")
-            time.sleep(10)  # Give DRBD time to initialize
-            return restored
-            
-        except linstor.LinstorError as e:
-            LOG.error("Restore attempt failed: %s", e)
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(retry_delay)
+    Note: in case of an exception during the restore process things such as
+    the resource definition of the target can be left on the server. To retry
+    the process ensure those resources are deleted first.
+    :param linstor.Resource resource: The source of the snapshot
+    :param cinder.objects.snapshot.Snapshot snap: The snapshot to restore.
+    If it can't be found, it's retried with a v1 compatible name.
+    :param str restore_name: The name of the resource to restore to.
+    :return: The restored resource
+    :rtype: linstor.Resource
+    """
+    try:
+        return resource.restore_from_snapshot(snap['name'], restore_name)
+    except linstor.LinstorError:
+        raise
 
 
 @wrap_linstor_api_exception
