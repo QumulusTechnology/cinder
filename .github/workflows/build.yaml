@@ -109,7 +109,7 @@ jobs:
           python3 -m venv kolla
           source kolla/bin/activate
           pip install -U pip
-          pip install docker
+          pip install docker setuptools
           pip install git+https://github.com/QumulusTechnology/kolla@${BRANCH}
 
       - name: Create kolla-build.conf
