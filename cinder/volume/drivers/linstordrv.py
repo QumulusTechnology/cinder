@@ -492,131 +492,157 @@ class LinstorDriver(driver.VolumeDriver):
     @wrap_linstor_api_exception
     @volume_utils.trace
     def create_volume_from_snapshot(self, volume, snapshot):
+        """Creates new volume from a snapshot with detailed logging."""
+        LOG.info("Starting volume creation from snapshot - Volume: %s, Snapshot: %s", 
+                volume['id'], snapshot['id'])
+
         def wait_for_volume_sync(resource, timeout=720):
-            """Wait for volume to be fully synced including TieBreaker.
-            
-            Args:
-                resource: Linstor resource
-                timeout: Maximum wait time in seconds
-            """
+            """Wait for volume sync with logging."""
+            LOG.info("Waiting for volume sync: %s (timeout: %ds)", resource.name, timeout)
             start_time = timeutils.utcnow()
+            
             while True:
                 try:
-                    with resource.client as lclient:
+                    with self.c.get() as lclient:
                         resp = lclient.volume_list_raise(
                             filter_by_resources=[resource.name]
                         )
                         if not resp.resources:
-                            time.sleep(1)
+                            LOG.debug("No resources found yet, waiting...")
+                            time.sleep(2)
                             continue
                             
                         resource_state = resp.resources[0]
                         volumes = resource_state.volumes
                         
-                        # Check regular replicas are UpToDate
+                        # Log current state of each volume
+                        for vol in volumes:
+                            LOG.debug("Volume state - Node: %s, DiskState: %s, StorPool: %s", 
+                                    resource_state.node_name, vol.disk_state, 
+                                    vol.storage_pool_name)
+                        
                         replicas_ready = all(
                             vol.disk_state == 'UpToDate'
                             for vol in volumes 
                             if not _is_tiebreaker(vol)
                         )
-                        
-                        # Check TieBreaker replica exists and is ready
                         tiebreaker_ready = any(
-                            vol.disk_state in ('UpToDate', 'Diskless')  # TieBreaker can be Diskless
+                            vol.disk_state in ('UpToDate', 'Diskless')
                             for vol in volumes
                             if _is_tiebreaker(vol)
                         )
                         
-                        if replicas_ready and tiebreaker_ready:
-                            LOG.info("Resource %s and TieBreaker fully synced", resource.name)
-                            return True
-                            
-                        LOG.debug("Waiting for sync - Replicas ready: %s, TieBreaker ready: %s",
+                        LOG.debug("Sync status - Replicas ready: %s, TieBreaker ready: %s",
                                 replicas_ready, tiebreaker_ready)
+                        
+                        if replicas_ready and tiebreaker_ready:
+                            LOG.info("Resource %s fully synced", resource.name)
+                            return True
                             
                 except linstor.LinstorError as e:
                     if timeutils.delta_seconds(start_time, timeutils.utcnow()) > timeout:
                         LOG.error('Timeout waiting for volume sync: %s', e)
                         raise
+                    LOG.warning("Sync check failed: %s. Retrying...", e)
                     time.sleep(2)
 
-        def _is_tiebreaker(volume):
-            """Check if volume is a TieBreaker replica."""
-            try:
-                return volume.storage_pool_name == 'DfltDisklessStorPool' and 'TieBreaker' in volume.properties
-            except AttributeError:
-                return False
-        
         def wait_for_volume_resize(resource, expected_size, timeout=720):
+            """Wait for volume resize with logging."""
+            LOG.info("Starting volume resize: %s to %s bytes", resource.name, expected_size)
             start_time = timeutils.utcnow()
+            
             while True:
                 try:
                     if not resource.volumes:
-                        time.sleep(1)
+                        LOG.debug("No volumes found yet, waiting...")
+                        time.sleep(2)
                         continue
                         
                     current_size = resource.volumes[0].size
+                    LOG.debug("Current size: %s, Expected size: %s", current_size, expected_size)
+                    
                     if current_size >= expected_size:
-                        # Wait for sync after resize
+                        LOG.info("Volume reached target size, waiting for sync")
                         wait_for_volume_sync(resource)
                         return True
                         
+                    LOG.info("Resizing volume to %s bytes", expected_size)
                     resource.volumes[0].size = expected_size
                     wait_for_volume_sync(resource)
+                    LOG.info("Volume resize completed successfully")
                     return True
                     
                 except linstor.LinstorError as e:
                     if timeutils.delta_seconds(start_time, timeutils.utcnow()) > timeout:
                         LOG.error('Timeout waiting for volume resize: %s', e)
                         raise
+                    LOG.warning("Resize attempt failed: %s. Retrying...", e)
                     time.sleep(2)
 
         def cleanup_resource(resource_name):
+            """Cleanup resource with logging."""
+            LOG.info("Attempting to cleanup resource: %s", resource_name)
             try:
                 resource = linstor.Resource(resource_name, existing_client=self.c.get())
                 resource.delete(snapshots=True)
-                LOG.debug('Cleaned up resource: %s', resource_name)
+                LOG.info('Successfully cleaned up resource: %s', resource_name)
             except linstor.LinstorError as e:
                 LOG.warning('Failed to cleanup resource %s: %s', resource_name, e)
 
+        # Main execution
         use_linked_clone = volume.get('metadata', {}).get('useLinkedClone') == 'true'
         volume_name = volume['name'] if use_linked_clone else f"volume-{uuid.uuid4()}"
         temp_resources = []
+        
+        LOG.info("Starting volume creation - UseLinkedClone: %s, VolumeName: %s", 
+                use_linked_clone, volume_name)
 
         try:
+            LOG.info("Looking for source resource: %s", snapshot['volume']['name'])
             src = _get_existing_resource(self.c.get(), snapshot['volume']['name'])
-            LOG.debug('Found source resource for snapshot: %s', src.name)
+            LOG.info('Found source resource: %s', src.name)
 
+            LOG.info("Restoring snapshot %s to resource %s", snapshot['name'], volume_name)
             rsc = _restore_snapshot_to_new_resource(src, snapshot, volume_name)
             temp_resources.append(volume_name)
-            LOG.debug('Restored snapshot to resource: %s', volume_name)
+            LOG.info('Successfully restored snapshot to resource: %s', volume_name)
 
-            # Wait for initial sync
+            LOG.info("Waiting for initial volume sync")
             wait_for_volume_sync(rsc)
+            LOG.info("Initial sync completed")
 
-            # Resize if needed
             expected_size = volume['size'] * units.Gi
+            LOG.info("Checking if resize needed. Current: %s, Expected: %s", 
+                    rsc.volumes[0].size if rsc.volumes else 'Unknown', expected_size)
+                    
             wait_for_volume_resize(rsc, expected_size)
-            LOG.debug('Volume resize completed successfully')
+            LOG.info('Volume resize and sync completed successfully')
 
             if not use_linked_clone:
-                # Create independent clone only after full sync
+                LOG.info("Creating independent clone")
                 volume['snapshot_id'] = None
                 volume.save()
                 
+                LOG.info("Getting resource for cloning: %s", volume_name)
                 new_rsc = _get_existing_resource(self.c.get(), volume_name)
-                # Verify source is fully synced before cloning
-                wait_for_volume_sync(new_rsc)
-                new_rsc.clone(volume['name'], use_zfs_clone=False)
-                LOG.debug('Created independent clone: %s', volume['name'])
                 
+                LOG.info("Verifying source sync before cloning")
+                wait_for_volume_sync(new_rsc)
+                
+                LOG.info("Creating clone: %s -> %s", volume_name, volume['name'])
+                new_rsc.clone(volume['name'], use_zfs_clone=False)
+                LOG.info('Successfully created independent clone: %s', volume['name'])
+                
+                LOG.info("Cleaning up temporary resource: %s", volume_name)
                 cleanup_resource(volume_name)
                 temp_resources.remove(volume_name)
 
+            LOG.info("Volume creation completed successfully: %s", volume['name'])
             return {}
 
         except Exception as e:
             LOG.error('Failed to create volume from snapshot: %s', e)
+            LOG.info('Starting cleanup of temporary resources')
             for resource_name in temp_resources:
                 cleanup_resource(resource_name)
             raise
