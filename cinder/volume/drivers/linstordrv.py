@@ -501,13 +501,16 @@ class LinstorDriver(driver.VolumeDriver):
             snapshot['volume']['name'],
             snapshot['volume_id'],
         )
-        volume_name = volume['name'] + "-temp"
-        volume_id = volume['id'] + "-temp"
-        use_linked_clone = False
-        if volume['metadata'] and (volume['metadata']['useLinkedClone'] == 'true'):
-            use_linked_clone = True
-            volume_name = volume['name']
-            volume_id = volume['id']
+        volume_name = volume['name']
+        volume_id = volume['id'] 
+
+        # volume_name = volume['name'] + "-temp"
+        # volume_id = volume['id'] + "-temp"
+        # use_linked_clone = False
+        # if volume['metadata'] and (volume['metadata']['useLinkedClone'] == 'true'):
+        #     use_linked_clone = True
+        #     volume_name = volume['name']
+        #     volume_id = volume['id']
 
         try:
             rsc = _restore_snapshot_to_new_resource(
@@ -521,8 +524,6 @@ class LinstorDriver(driver.VolumeDriver):
             leftover_rsc.delete()
             raise
 
-        
-        
         # Add timeout mechanism
         start_time = timeutils.utcnow()
         timeout = 180  # 3 minutes timeout
@@ -554,17 +555,26 @@ class LinstorDriver(driver.VolumeDriver):
         
 
 
-        if use_linked_clone is False:
-            volume['snapshot_id'] = None
-            volume.save()
-            
-            new_rsc = _get_existing_resource(
-                self.c.get(),
-                volume_name,
-                volume_id,
-            )
-            new_rsc.clone(volume['name'], use_zfs_clone=False)
-            new_rsc.delete(snapshots=True)
+        # if use_linked_clone is False:
+        #     volume['snapshot_id'] = None
+        #     volume.save()
+        #     linstor_size = volume['size'] * units.Gi // units.Ki
+
+        #     rg = self._resource_group_for_volume_type(volume['volume_type'])
+        #     linstor.Resource.from_resource_group(
+        #         uri="[unused]",
+        #         resource_group_name=rg.name,
+        #         resource_name=volume_name,
+        #         vlm_sizes=[linstor_size],
+        #         existing_client=self.c.get(),
+        #     )
+        #     new_rsc = _get_existing_resource(
+        #         self.c.get(),
+        #         volume_name,
+        #         volume_id,
+        #     )
+        #     new_rsc.clone(volume['name'], use_zfs_clone=False)
+        #     new_rsc.delete(snapshots=True)
 
         return {}
 
