@@ -474,10 +474,10 @@ class LinstorDriver(driver.VolumeDriver):
         :return: A dict of fields to update on the volume object
         """
 
-        LOG.Info('Creating volume %s', volume['name'])
-        LOG.Info('Volume size %s', volume['size'])
+        LOG.info('Creating volume %s', volume['name'])
+        LOG.info('Volume size %s', volume['size'])
         linstor_size = volume['size'] * units.Gi // units.Ki
-        LOG.Info('LINSTOR size %s', linstor_size)
+        LOG.info('LINSTOR size %s', linstor_size)
 
         rg = self._resource_group_for_volume_type(volume['volume_type'])
         linstor.Resource.from_resource_group(
@@ -500,7 +500,7 @@ class LinstorDriver(driver.VolumeDriver):
         :return: update for the volume model
         :rtype: dict
         """
-        LOG.Info('Creating volume from snapshot %s', volume['name'])
+        LOG.info('Creating volume from snapshot %s', volume['name'])
         src = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
@@ -536,10 +536,10 @@ class LinstorDriver(driver.VolumeDriver):
 
         while True:
             try:
-                LOG.Info('Creating volume from snapshot %s', volume['name'])
-                LOG.Info('Volume size %s', volume['size'])
+                LOG.info('Creating volume from snapshot %s', volume['name'])
+                LOG.info('Volume size %s', volume['size'])
                 expected_size = volume['size'] * units.Gi
-                LOG.Info('LINSTOR size %s', expected_size)
+                LOG.info('LINSTOR size %s', expected_size)
                 # Check if volume is available and needs resize
                 if rsc.volumes and rsc.volumes[0].size < expected_size:
                     rsc.volumes[0].size = expected_size
@@ -595,7 +595,7 @@ class LinstorDriver(driver.VolumeDriver):
         be enforced in Cinder, Linstor just double checks.
         :param cinder.objects.volume.Volume volume: the volume to delete
         """
-        LOG.Info('Deleting volume %s', volume['name'])
+        LOG.info('Deleting volume %s', volume['name'])
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
@@ -626,7 +626,7 @@ class LinstorDriver(driver.VolumeDriver):
 
         :param cinder.objects.snapshot.Snapshot snapshot: snapshot to create
         """
-        LOG.Info('Creating snapshot %s', snapshot['name'])
+        LOG.info('Creating snapshot %s', snapshot['name'])
         rsc = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
@@ -667,7 +667,7 @@ class LinstorDriver(driver.VolumeDriver):
         :param cinder.objects.snapshot.Snapshot snapshot: The snapshot to
          revert to
         """
-        LOG.Info('Reverting volume %s to snapshot %s', volume['name'],
+        LOG.info('Reverting volume %s to snapshot %s', volume['name'],
                 snapshot['name'])
         rsc = _get_existing_resource(
             self.c.get(),
@@ -682,10 +682,10 @@ class LinstorDriver(driver.VolumeDriver):
             rsc.snapshot_rollback('SN_' + snapshot['id'])
 
         
-        LOG.Info('Creating volume %s', volume['name'])
-        LOG.Info('Volume size %s', volume['size'])
+        LOG.info('Creating volume %s', volume['name'])
+        LOG.info('Volume size %s', volume['size'])
         expected_size = volume['size'] * units.Gi
-        LOG.Info('LINSTOR size %s', expected_size)
+        LOG.info('LINSTOR size %s', expected_size)
         if rsc.volumes[0].size < expected_size:
             rsc.volumes[0].size = expected_size
 
@@ -706,7 +706,7 @@ class LinstorDriver(driver.VolumeDriver):
         :param cinder.objects.volume.Volume volume: The new clone
         :param cinder.objects.volume.Volume src_vref: The volume to clone from
         """
-        LOG.Info('Creating clone %s from %s', volume['name'], src_vref['name'])
+        LOG.info('Creating clone %s from %s', volume['name'], src_vref['name'])
         if self.configuration.safe_get('linstor_use_snapshot_based_clone'):
             ctxt = volume._context
 
@@ -754,7 +754,7 @@ class LinstorDriver(driver.VolumeDriver):
     def copy_image_to_volume(self, context, volume, image_service, image_id,
                              disable_sparse=False):
         """Copy an image to a volume"""
-        LOG.Info('Copying image to volume %s', volume['name'])
+        LOG.info('Copying image to volume %s', volume['name'])
         rsc = _get_existing_resource(self.c.get(), volume['name'],
                                      volume['id'])
 
@@ -774,7 +774,7 @@ class LinstorDriver(driver.VolumeDriver):
     @wrap_linstor_api_exception
     @volume_utils.trace
     def copy_volume_to_image(self, context, volume, image_service, image_meta):
-        LOG.Info('Copying volume to image %s', volume['name'])
+        LOG.info('Copying volume to image %s', volume['name'])
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
