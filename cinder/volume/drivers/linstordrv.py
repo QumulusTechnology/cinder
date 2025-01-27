@@ -746,8 +746,23 @@ class LinstorDriver(driver.VolumeDriver):
                 src_vref['name'],
                 src_vref['id'],
             )
+            LOG.info('Cloning volume with direct clone method')
             rsc.clone(volume['name'], use_zfs_clone=False)
-            return {}
+            
+            LOG.info('Origin volume size %s', src_vref['size'])
+            LOG.info('Cloned volume size %s', volume['size'])
+            # Handle size after clone
+            if volume['size'] != src_vref['size']:
+                LOG.info('Resizing cloned volume to %sGB', volume['size'])
+                cloned_rsc = _get_existing_resource(
+                    self.c.get(),
+                    volume['name'],
+                    volume['id'],
+                )
+                linstor_size = volume['size'] * units.Gi // units.Ki
+                cloned_rsc.volumes[0].size = linstor_size
+        
+        return {}
 
     @wrap_linstor_api_exception
     @volume_utils.trace
