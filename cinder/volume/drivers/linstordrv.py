@@ -921,7 +921,8 @@ class LinstorDriver(driver.VolumeDriver):
             volume['id'],
         )
 
-        linstor_size = new_size * units.Gi // units.Ki
+        # convert GB to bytes using units.Gi
+        linstor_size = new_size * units.Gi
         rsc.volumes[0].size = linstor_size
 
         if hasattr(self.target_driver, 'extend_target'):
