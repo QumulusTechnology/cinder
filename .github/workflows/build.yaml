@@ -147,6 +147,10 @@ jobs:
           {% block base_ubuntu_package_sources_list %}
           {% endblock %}
 
+          {% block base_footer %}
+          RUN pip install jaeger-client
+          {% endblock %}
+
           {% block ${REPOSITORY}_base_footer %}
           {% endblock %}
 
