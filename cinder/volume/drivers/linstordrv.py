@@ -526,7 +526,7 @@ class LinstorDriver(driver.VolumeDriver):
             # Wait for volume to be ready and resize if needed
             while True:
                 try:
-                    expected_size = volume['size'] * units.Gi // units.Ki
+                    expected_size = volume['size'] * units.Gi
                     LOG.debug('Checking volume size. Expected: %s', expected_size)
                     
                     if not rsc.volumes:
@@ -779,7 +779,8 @@ class LinstorDriver(driver.VolumeDriver):
                     volume['name'],
                     volume['id'],
                 )
-                linstor_size = volume['size'] * units.Gi // units.Ki
+                # convert GB to bytes using units.Gi
+                linstor_size = volume['size'] * units.Gi
                 cloned_rsc.volumes[0].size = linstor_size
         
         return {}
