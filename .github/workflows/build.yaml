@@ -54,22 +54,25 @@ jobs:
       - name: Set Release version
         run: |
 
+
+
           if [ "$BRANCH" == "main" ]; then
-            echo "OPENSTACK_VERSION=2023.2" >> $GITHUB_ENV
-            echo "BASE_OS_TAG=22.04" >> $GITHUB_ENV
+            echo "OPENSTACK_VERSION=2024.2" >> $GITHUB_ENV
+            echo "BASE_OS_TAG=24.04" >> $GITHUB_ENV
           elif [ "$BRANCH" == "staging" ]; then
-            echo "OPENSTACK_VERSION=2023.2" >> $GITHUB_ENV
-            echo "BASE_OS_TAG=22.04" >> $GITHUB_ENV
+            echo "OPENSTACK_VERSION=2024.2" >> $GITHUB_ENV
+            echo "BASE_OS_TAG=24.04" >> $GITHUB_ENV
           elif [ "$BRANCH" == "qa" ]; then
-            echo "OPENSTACK_VERSION=2023.2" >> $GITHUB_ENV
-            echo "BASE_OS_TAG=22.04" >> $GITHUB_ENV
+            echo "OPENSTACK_VERSION=2024.2" >> $GITHUB_ENV
+            echo "BASE_OS_TAG=24.04" >> $GITHUB_ENV
           elif [ "$BRANCH" == "experimental" ]; then
             echo "OPENSTACK_VERSION=2024.2" >> $GITHUB_ENV
             echo "BASE_OS_TAG=24.04" >> $GITHUB_ENV
           else
-            echo "OPENSTACK_VERSION=2023.2" >> $GITHUB_ENV
-            echo "BASE_OS_TAG=22.04" >> $GITHUB_ENV
+            echo "OPENSTACK_VERSION=2024.2" >> $GITHUB_ENV
+            echo "BASE_OS_TAG=24.04" >> $GITHUB_ENV
           fi
+
 
           if [ "$BRANCH" == "main" ]; then
             TAG=main
