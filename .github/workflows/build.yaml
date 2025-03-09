@@ -54,8 +54,6 @@ jobs:
       - name: Set Release version
         run: |
 
-
-
           if [ "$BRANCH" == "main" ]; then
             echo "OPENSTACK_VERSION=2024.2" >> $GITHUB_ENV
             echo "BASE_OS_TAG=24.04" >> $GITHUB_ENV
@@ -120,19 +118,20 @@ jobs:
           CWD="$(pwd)"
           sudo mkdir -p /etc/kolla
           sudo bash -c "cat << EOF > /etc/kolla/kolla-build.conf
+
           [DEFAULT]
           base = ubuntu
+          namespace = kolla
           base_tag = ${BASE_OS_TAG}
-          namespace = ${BRANCH}
+          openstack_release = ${OPENSTACK_VERSION}
+          registry = ${REPO_ADDRESS}/qcp-${BRANCH}
           push = true
           skip_existing = false
           threads = 16
           push_threads = 4
-          registry = ${REPO_ADDRESS}/kolla
           install_type = source
           tag = latest
           template_override = /etc/kolla/template-overrides.j2
-          openstack_release = ${OPENSTACK_VERSION}
           docker_healthchecks = true
           network_mode = host
 
@@ -140,7 +139,6 @@ jobs:
           type = local
           location = ${CWD}
           EOF"
-
 
       - name: Create template-overrides.j2
         run: |
@@ -173,8 +171,8 @@ jobs:
       - name: Tag and push docker images
         run: |
           timestamp=$(date +%Y%m%d%H%M%S)
-          for i in $(docker images --format '{{.Repository}}' | grep "/${BRANCH}/"); do
+          for i in $(docker images --format '{{.Repository}}' | grep "/qcp-${BRANCH}/"); do
             image=${i##*/}
-            docker tag ${i}:latest ${REPO_ADDRESS}/kolla/${BRANCH}/${image}:${timestamp}
+            docker tag ${i}:latest ${REPO_ADDRESS}/qcp-${BRANCH}/kolla/${image}:${timestamp}
             docker image push --all-tags ${i}
           done
