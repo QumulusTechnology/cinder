@@ -495,7 +495,7 @@ class LinstorDriver(driver.VolumeDriver):
     def create_volume_from_snapshot(self, volume, snapshot):
         """Create a new volume from a snapshot with unlinked clones by default"""
         LOG.info('Creating volume %s from snapshot %s', volume['name'], snapshot['name'])
-        
+
         src = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
@@ -520,15 +520,15 @@ class LinstorDriver(driver.VolumeDriver):
 
             # Add timeout mechanism for initial resource creation
             start_time = timeutils.utcnow()
-            timeout = 180  
-            retry_interval = 1  
+            timeout = 180
+            retry_interval = 1
 
             # Wait for volume to be ready and resize if needed
             while True:
                 try:
                     expected_size = volume['size'] * units.Gi
                     LOG.debug('Checking volume size. Expected: %s', expected_size)
-                    
+
                     if not rsc.volumes:
                         LOG.debug('Waiting for volume to be created...')
                     elif rsc.volumes[0].size < expected_size:
@@ -563,7 +563,7 @@ class LinstorDriver(driver.VolumeDriver):
                     # Create new resource with proper size
                     linstor_size = volume['size'] * units.Gi // units.Ki
                     rg = self._resource_group_for_volume_type(volume['volume_type'])
-                    
+
                     LOG.debug('Creating new independent resource')
                     new_rsc = linstor.Resource.from_resource_group(
                         uri="[unused]",
@@ -575,7 +575,7 @@ class LinstorDriver(driver.VolumeDriver):
 
                     # Wait for both resources to be ready
                     time.sleep(5)
-                    
+
                     LOG.debug('Copying data from temporary to final resource')
                     with _temp_resource_path(self.c.get(), rsc, self._hostname) as src_path, \
                         _temp_resource_path(self.c.get(), new_rsc, self._hostname) as dst_path:
@@ -616,28 +616,28 @@ class LinstorDriver(driver.VolumeDriver):
         :param cinder.objects.volume.Volume volume: the volume to delete
         """
         LOG.info('Deleting volume %s', volume['name'])
-        rsc = _get_existing_resource(
-            self.c.get(),
-            volume['name'],
-            volume['id'],
-        )
-        try:
-            rsc.delete(snapshots=False)
-        except linstor.LinstorError:
-            raise exception.VolumeIsBusy(volume_name=volume['name'])
 
-        try:
-            rg = linstor.ResourceGroup(
-                rsc.resource_group_name,
-                existing_client=self.c.get(),
+
+        try: # Delete the resource
+            rsc = _get_existing_resource(
+                self.c.get(),
+                volume['name'],
+                volume['id'],
             )
-            rg.delete()
-        except linstor.LinstorError as e:
-            LOG.debug(
-                'could not delete resource group %s, ignoring: %s',
-                rsc.resource_group_name,
-                e
-            )
+
+            rsc.delete(snapshots=False)
+
+        except Exception as e:
+            if e.msg.startswith("Volume driver reported an error: Found no matching resource in LINSTOR backend for volume volume-"):
+                LOG.info('Volume %s not found in LINSTOR backend, skipping deletion', volume['name'])
+            else:
+                LOG.exception('Failed to delete volume %s', volume['name'])
+                raise
+            
+        LOG.info('Successfully deleted volume %s', volume['name'])
+        
+        return {}
+
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -669,10 +669,10 @@ class LinstorDriver(driver.VolumeDriver):
 
         try:
             rsc.snapshot_delete(snapshot['name'])
-        except linstor.LinstorError:            
+        except linstor.LinstorError:
             raise exception.SnapshotIsBusy(snapshot['name'])
 
-        return {}   
+        return {}
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -701,7 +701,7 @@ class LinstorDriver(driver.VolumeDriver):
                      'name %s', 'SN_' + snapshot['id'])
             rsc.snapshot_rollback('SN_' + snapshot['id'])
 
-        
+
         LOG.info('Creating volume %s', volume['name'])
         LOG.info('Volume size %s', volume['size'])
         expected_size = volume['size'] * units.Gi
@@ -768,7 +768,7 @@ class LinstorDriver(driver.VolumeDriver):
             )
             LOG.info('Cloning volume with direct clone method')
             rsc.clone(volume['name'], use_zfs_clone=False)
-            
+
             LOG.info('Origin volume size %s', src_vref['size'])
             LOG.info('Cloned volume size %s', volume['size'])
             # Handle size after clone
@@ -782,7 +782,7 @@ class LinstorDriver(driver.VolumeDriver):
                 # convert GB to bytes using units.Gi
                 linstor_size = volume['size'] * units.Gi
                 cloned_rsc.volumes[0].size = linstor_size
-        
+
         return {}
 
     @wrap_linstor_api_exception
@@ -838,10 +838,10 @@ class LinstorDriver(driver.VolumeDriver):
     @volume_utils.trace
     def _update_volume_stats(self):
         """Refresh the Cinder storage pool statistics for scheduling decisions.
-        
+
         Safely handles cases where nodes are down by checking for None values
-        in storage pool capacities. Aggregates all (per-node) storage pools as 
-        a total capacity, even if that clashes with how replicated volumes are 
+        in storage pool capacities. Aggregates all (per-node) storage pools as
+        a total capacity, even if that clashes with how replicated volumes are
         using these storage pools.
         """
         with self.c.get() as lclient:
@@ -850,11 +850,11 @@ class LinstorDriver(driver.VolumeDriver):
 
         def _safe_get_capacity(storage_pool, attr):
             """Safely get capacity value from storage pool.
-            
+
             Args:
                 storage_pool: Storage pool object
                 attr: Attribute to get ('total_capacity' or 'free_capacity')
-                
+
             Returns:
                 int: Capacity value or 0 if unavailable
             """
@@ -865,7 +865,7 @@ class LinstorDriver(driver.VolumeDriver):
                 return value if value is not None else 0
             except AttributeError:
                 return 0
-        
+
         # Filter out diskless storage pools
         storage_pools = [sp for sp in storage_pools if not sp.is_diskless()]
 
@@ -875,15 +875,15 @@ class LinstorDriver(driver.VolumeDriver):
         tot = _kib_to_gib(sum(
             _safe_get_capacity(p, 'total_capacity') for p in storage_pools
         ))
-        
+
         free = _kib_to_gib(sum(
             _safe_get_capacity(p, 'free_capacity') for p in storage_pools
         ))
 
         # Calculate provisioned capacity with None check
         provisioned_cap = _kib_to_gib(sum(
-            vd.size for rd in resource_dfns 
-            for vd in rd.volume_definitions 
+            vd.size for rd in resource_dfns
+            for vd in rd.volume_definitions
             if hasattr(vd, 'size') and vd.size is not None
         ))
 
@@ -912,7 +912,7 @@ class LinstorDriver(driver.VolumeDriver):
         }
 
         return self._stats
-        
+
     @wrap_linstor_api_exception
     @volume_utils.trace
     def extend_volume(self, volume, new_size):
