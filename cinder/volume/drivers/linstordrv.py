@@ -617,7 +617,6 @@ class LinstorDriver(driver.VolumeDriver):
         """
         LOG.info('Deleting volume %s', volume['name'])
 
-
         try: # Delete the resource
             rsc = _get_existing_resource(
                 self.c.get(),
@@ -626,9 +625,14 @@ class LinstorDriver(driver.VolumeDriver):
             )
 
             rsc.delete(snapshots=False)
-
         except Exception as e:
-            if e.msg.startswith("Volume driver reported an error: Found no matching resource in LINSTOR backend for volume volume-"):
+            error_msg = None
+            if hasattr(e, 'msg'):
+                error_msg = e.msg
+            elif hasattr(e, '_msg'):
+                error_msg = e._msg
+                
+            if error_msg and error_msg.startswith("Volume driver reported an error: Found no matching resource in LINSTOR backend for volume volume-"):
                 LOG.info('Volume %s not found in LINSTOR backend, skipping deletion', volume['name'])
             else:
                 LOG.exception('Failed to delete volume %s', volume['name'])
@@ -637,7 +641,6 @@ class LinstorDriver(driver.VolumeDriver):
         LOG.info('Successfully deleted volume %s', volume['name'])
         
         return {}
-
 
     @wrap_linstor_api_exception
     @volume_utils.trace
