@@ -617,30 +617,42 @@ class LinstorDriver(driver.VolumeDriver):
         """
         LOG.info('Deleting volume %s', volume['name'])
 
-        try: # Delete the resource
-            rsc = _get_existing_resource(
-                self.c.get(),
-                volume['name'],
-                volume['id'],
-            )
-
-            rsc.delete(snapshots=False)
-        except Exception as e:
-            error_msg = None
-            if hasattr(e, 'msg'):
-                error_msg = e.msg
-            elif hasattr(e, '_msg'):
-                error_msg = e._msg
-                
-            if error_msg and error_msg.startswith("Volume driver reported an error: Found no matching resource in LINSTOR backend for volume volume-"):
-                LOG.info('Volume %s not found in LINSTOR backend, skipping deletion', volume['name'])
-            else:
-                LOG.exception('Failed to delete volume %s', volume['name'])
-                raise
-            
-        LOG.info('Successfully deleted volume %s', volume['name'])
+        retry_delays = [2, 3, 5, 8]
+        max_retries = len(retry_delays)
         
-        return {}
+        for attempt in range(max_retries):
+            try:
+                rsc = _get_existing_resource(
+                    self.c.get(),
+                    volume['name'],
+                    volume['id'],
+                )
+
+                rsc.delete(snapshots=False)
+                LOG.info('Successfully deleted volume %s', volume['name'])
+                return {}
+                
+            except Exception as e:
+                error_msg = None
+                if hasattr(e, 'msg'):
+                    error_msg = e.msg
+                elif hasattr(e, '_msg'):
+                    error_msg = e._msg
+                    
+                if error_msg and error_msg.startswith("Volume driver reported an error: Found no matching resource in LINSTOR backend for volume volume-"):
+                    LOG.info('Volume %s not found in LINSTOR backend, skipping deletion', volume['name'])
+                    return {}
+                
+                # If this is the last attempt, raise the exception
+                if attempt == max_retries - 1:
+                    LOG.exception('Failed to delete volume %s after %d attempts', volume['name'], max_retries)
+                    raise
+                    
+                # Wait before retrying
+                wait_time = retry_delays[attempt]
+                LOG.warning('Failed to delete volume %s (attempt %d/%d), retrying in %d seconds...', 
+                          volume['name'], attempt + 1, max_retries, wait_time)
+                time.sleep(wait_time)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
