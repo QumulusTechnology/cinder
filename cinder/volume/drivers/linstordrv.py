@@ -606,53 +606,79 @@ class LinstorDriver(driver.VolumeDriver):
                 pass
             raise
 
-    @wrap_linstor_api_exception
-    @volume_utils.trace
-    def delete_volume(self, volume):
-        """Delete the volume in the backend
+@wrap_linstor_api_exception
+@volume_utils.trace
+def delete_volume(self, volume):
+    """Delete the volume in the backend"""
+    LOG.info('Deleting volume %s', volume['name'])
 
-        Does not succeed if snapshots are still attached. This should already
-        be enforced in Cinder, Linstor just double checks.
-        :param cinder.objects.volume.Volume volume: the volume to delete
-        """
-        LOG.info('Deleting volume %s', volume['name'])
+    retry_delays = [5, 10, 20, 30, 60]
+    max_retries = len(retry_delays)
 
-        retry_delays = [2, 3, 5, 8]
-        max_retries = len(retry_delays)
-        
-        for attempt in range(max_retries):
+    for attempt in range(max_retries):
+        try:
+            rsc = _get_existing_resource(
+                self.c.get(),
+                volume['name'],
+                volume['id'],
+            )
+
+            # Before deleting, ensure the resource is properly detached
             try:
-                rsc = _get_existing_resource(
-                    self.c.get(),
-                    volume['name'],
-                    volume['id'],
-                )
-
-                rsc.delete(snapshots=False)
-                LOG.info('Successfully deleted volume %s', volume['name'])
-                return {}
-                
+                # Check if resource is diskless and in use
+                resource_info = self.c.get().resource_dfn(f"volume-{volume['id']}").resources().all()
+                for res in resource_info:
+                    # If the resource is still in use, wait before retry
+                    if res.get('in_use', False):
+                        LOG.warning('Resource %s is still in use, waiting before retry', volume['name'])
+                        raise Exception("Resource in use, waiting for detach")
             except Exception as e:
-                error_msg = None
-                if hasattr(e, 'msg'):
-                    error_msg = e.msg
-                elif hasattr(e, '_msg'):
-                    error_msg = e._msg
-                    
-                if error_msg and error_msg.startswith("Volume driver reported an error: Found no matching resource in LINSTOR backend for volume volume-"):
-                    LOG.info('Volume %s not found in LINSTOR backend, skipping deletion', volume['name'])
-                    return {}
-                
-                # If this is the last attempt, raise the exception
-                if attempt == max_retries - 1:
-                    LOG.exception('Failed to delete volume %s after %d attempts', volume['name'], max_retries)
+                LOG.debug('Resource check failed: %s', str(e))
+                # Continue with deletion attempt
+
+            # Try to delete the resource
+            rsc.delete(snapshots=False)
+            LOG.info('Successfully deleted volume %s', volume['name'])
+            return {}
+
+        except linstor.errors.LinstorError as le:
+            # Special handling for ZFS failures
+            if 'Failed to delete zfs volume' in str(le):
+                # If this is not the last attempt, retry
+                if attempt < max_retries - 1:
+                    wait_time = retry_delays[attempt]
+                    LOG.warning('ZFS volume deletion failed for %s (attempt %d/%d), retrying in %d seconds...',
+                              volume['name'], attempt + 1, max_retries, wait_time)
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    LOG.error('Failed to delete ZFS volume %s after %d attempts', volume['name'], max_retries)
                     raise
-                    
-                # Wait before retrying
-                wait_time = retry_delays[attempt]
-                LOG.warning('Failed to delete volume %s (attempt %d/%d), retrying in %d seconds...', 
-                          volume['name'], attempt + 1, max_retries, wait_time)
-                time.sleep(wait_time)
+            else:
+                # Handle other LINSTOR errors
+                raise
+
+        except Exception as e:
+            error_msg = None
+            if hasattr(e, 'msg'):
+                error_msg = e.msg
+            elif hasattr(e, '_msg'):
+                error_msg = e._msg
+
+            if error_msg and error_msg.startswith("Volume driver reported an error: Found no matching resource in LINSTOR backend for volume volume-"):
+                LOG.info('Volume %s not found in LINSTOR backend, skipping deletion', volume['name'])
+                return {}
+
+            # If this is the last attempt, raise the exception
+            if attempt == max_retries - 1:
+                LOG.exception('Failed to delete volume %s after %d attempts', volume['name'], max_retries)
+                raise
+
+            # Wait before retrying
+            wait_time = retry_delays[attempt]
+            LOG.warning('Failed to delete volume %s (attempt %d/%d), retrying in %d seconds...',
+                      volume['name'], attempt + 1, max_retries, wait_time)
+            time.sleep(wait_time)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -913,8 +939,8 @@ class LinstorDriver(driver.VolumeDriver):
             'driver_version': self.get_version(),
             'storage_protocol': self.protocol,
             'location_info': self._linstor_uri_str,
-            'multiattach': True,
-            'online_extend_support': True,
+            'multiattach': True, # ToDo - need to make this dynamic based on whether DRBD multiattach is enabled in the volume type - linstor:DrbdOptions/Net/allow-two-primaries
+            'online_extend_support': True, # This was dependent on the target driver, but now that we have a direct target driver, we can support online extend
             'total_capacity_gb': tot,
             'provisioned_capacity_gb': provisioned_cap,
             'free_capacity_gb': free,
