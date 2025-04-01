@@ -910,7 +910,7 @@ class LinstorDriver(driver.VolumeDriver):
                         raise exception.ImageNotFound(image_id=image_id)
                     
                     # Get blocksize from config or use default
-                    blocksize = self.configuration.safe_get('dd_blocksize', '1M')
+                    blocksize = self.configuration.safe_get('dd_blocksize') or '1M'
                     LOG.info('Using blocksize %s for image copy [volume_id: %s] [func: copy_image_to_volume]', 
                              blocksize, volume['id'])
                     
