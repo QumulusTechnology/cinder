@@ -477,11 +477,13 @@ class LinstorDriver(driver.VolumeDriver):
         :param cinder.objects.volume.Volume volume: The new volume to create
         :return: A dict of fields to update on the volume object
         """
-
-        LOG.info('Creating volume %s', volume['name'])
-        LOG.info('Volume size %s', volume['size'])
+        LOG.info('Creating volume %s [volume_id: %s] [func: create_volume]', 
+                 volume['name'], volume['id'])
+        LOG.info('Volume size %s [volume_id: %s] [func: create_volume]', 
+                 volume['size'], volume['id'])
         linstor_size = volume['size'] * units.Gi // units.Ki
-        LOG.info('LINSTOR size %s', linstor_size)
+        LOG.info('LINSTOR size %s [volume_id: %s] [func: create_volume]', 
+                 linstor_size, volume['id'])
 
         rg = self._resource_group_for_volume_type(volume['volume_type'])
         linstor.Resource.from_resource_group(
@@ -498,7 +500,8 @@ class LinstorDriver(driver.VolumeDriver):
     @volume_utils.trace
     def create_volume_from_snapshot(self, volume, snapshot):
         """Create a new volume from a snapshot with unlinked clones by default"""
-        LOG.info('Creating volume %s from snapshot %s', volume['name'], snapshot['name'])
+        LOG.info('Creating volume %s from snapshot %s [volume_id: %s] [func: create_volume_from_snapshot]', 
+                 volume['name'], snapshot['name'], volume['id'])
 
         src = _get_existing_resource(
             self.c.get(),
@@ -509,11 +512,13 @@ class LinstorDriver(driver.VolumeDriver):
         # Default to unlinked clone unless explicitly specified as linked
         use_linked_clone = False
         if volume.get('metadata') and volume['metadata'].get('useLinkedClone') == 'true':
-            LOG.info('Using linked clone for volume %s', volume['name'])
+            LOG.info('Using linked clone for volume %s [volume_id: %s] [func: create_volume_from_snapshot]', 
+                     volume['name'], volume['id'])
             use_linked_clone = True
             final_name = volume['name']
         else:
-            LOG.info('Using unlinked clone (default) for volume %s', volume['name'])
+            LOG.info('Using unlinked clone (default) for volume %s [volume_id: %s] [func: create_volume_from_snapshot]', 
+                     volume['name'], volume['id'])
             final_name = volume['name'] + "-temp"
 
         try:
@@ -531,34 +536,42 @@ class LinstorDriver(driver.VolumeDriver):
             while True:
                 try:
                     expected_size = volume['size'] * units.Gi
-                    LOG.debug('Checking volume size. Expected: %s', expected_size)
+                    LOG.debug('Checking volume size. Expected: %s [volume_id: %s] [func: create_volume_from_snapshot]', 
+                             expected_size, volume['id'])
 
                     if not rsc.volumes:
-                        LOG.debug('Waiting for volume to be created...')
+                        LOG.debug('Waiting for volume to be created... [volume_id: %s] [func: create_volume_from_snapshot]', 
+                                 volume['id'])
                     elif rsc.volumes[0].size < expected_size:
-                        LOG.info('Resizing volume to %s', expected_size)
+                        LOG.info('Resizing volume to %s [volume_id: %s] [func: create_volume_from_snapshot]', 
+                                 expected_size, volume['id'])
                         rsc.volumes[0].size = expected_size
                         break
                     else:
-                        LOG.debug('Volume size is correct')
+                        LOG.debug('Volume size is correct [volume_id: %s] [func: create_volume_from_snapshot]', 
+                                 volume['id'])
                         break
 
                 except linstor.LinstorError as e:
                     if timeutils.delta_seconds(start_time, timeutils.utcnow()) > timeout:
-                        LOG.error('Timeout waiting for volume: %s', e)
+                        LOG.error('Timeout waiting for volume: %s [volume_id: %s] [func: create_volume_from_snapshot]', 
+                                 e, volume['id'])
                         rsc.delete()
                         raise
-                    LOG.debug('Volume not ready, retrying in %s seconds...', retry_interval)
+                    LOG.debug('Volume not ready, retrying in %s seconds... [volume_id: %s] [func: create_volume_from_snapshot]', 
+                             retry_interval, volume['id'])
                     time.sleep(retry_interval)
                     continue
                 except Exception as e:
-                    LOG.exception('Unexpected error handling volume')
+                    LOG.exception('Unexpected error handling volume [volume_id: %s] [func: create_volume_from_snapshot]', 
+                                volume['id'])
                     rsc.delete()
                     raise
 
             # For unlinked clones (default case)
             if not use_linked_clone:
-                LOG.info('Creating independent volume (unlinked clone)')
+                LOG.info('Creating independent volume (unlinked clone) [volume_id: %s] [func: create_volume_from_snapshot]', 
+                         volume['id'])
                 try:
                     # Clear snapshot association
                     volume['snapshot_id'] = None
@@ -568,7 +581,8 @@ class LinstorDriver(driver.VolumeDriver):
                     linstor_size = volume['size'] * units.Gi // units.Ki
                     rg = self._resource_group_for_volume_type(volume['volume_type'])
 
-                    LOG.debug('Creating new independent resource')
+                    LOG.debug('Creating new independent resource [volume_id: %s] [func: create_volume_from_snapshot]', 
+                             volume['id'])
                     new_rsc = linstor.Resource.from_resource_group(
                         uri="[unused]",
                         resource_group_name=rg.name,
@@ -580,26 +594,31 @@ class LinstorDriver(driver.VolumeDriver):
                     # Wait for both resources to be ready
                     time.sleep(5)
 
-                    LOG.debug('Copying data from temporary to final resource')
+                    LOG.debug('Copying data from temporary to final resource [volume_id: %s] [func: create_volume_from_snapshot]', 
+                             volume['id'])
                     with _temp_resource_path(self.c.get(), rsc, self._hostname) as src_path, \
                         _temp_resource_path(self.c.get(), new_rsc, self._hostname) as dst_path:
                         self._execute('dd', 'if=' + src_path, 'of=' + dst_path, 'bs=1M', run_as_root=True)
 
-                    LOG.info('Cleaning up temporary resource')
+                    LOG.info('Cleaning up temporary resource [volume_id: %s] [func: create_volume_from_snapshot]', 
+                             volume['id'])
                     rsc.delete(snapshots=True)
 
                 except Exception as e:
-                    LOG.exception('Failed to create unlinked clone')
+                    LOG.exception('Failed to create unlinked clone [volume_id: %s] [func: create_volume_from_snapshot]', 
+                                volume['id'])
                     if 'new_rsc' in locals():
                         new_rsc.delete()
                     rsc.delete()
                     raise
 
-            LOG.info('Successfully created volume from snapshot')
+            LOG.info('Successfully created volume from snapshot [volume_id: %s] [func: create_volume_from_snapshot]', 
+                     volume['id'])
             return {}
 
         except Exception as e:
-            LOG.exception('Failed to create volume from snapshot')
+            LOG.exception('Failed to create volume from snapshot [volume_id: %s] [func: create_volume_from_snapshot]', 
+                         volume['id'])
             try:
                 leftover_rsc = linstor.Resource(
                     final_name,
@@ -762,7 +781,8 @@ class LinstorDriver(driver.VolumeDriver):
         :param cinder.objects.volume.Volume volume: The new clone
         :param cinder.objects.volume.Volume src_vref: The volume to clone from
         """
-        LOG.info('Creating clone %s from %s', volume['name'], src_vref['name'])
+        LOG.info('Creating clone %s from %s [volume_id: %s] [func: create_cloned_volume]', 
+                 volume['name'], src_vref['name'], volume['id'])
         if self.configuration.safe_get('linstor_use_snapshot_based_clone'):
             ctxt = volume._context
 
@@ -802,14 +822,18 @@ class LinstorDriver(driver.VolumeDriver):
                 src_vref['name'],
                 src_vref['id'],
             )
-            LOG.info('Cloning volume with direct clone method')
+            LOG.info('Cloning volume with direct clone method [volume_id: %s] [func: create_cloned_volume]', 
+                     volume['id'])
             rsc.clone(volume['name'], use_zfs_clone=False)
 
-            LOG.info('Origin volume size %s', src_vref['size'])
-            LOG.info('Cloned volume size %s', volume['size'])
+            LOG.info('Origin volume size %s [volume_id: %s] [func: create_cloned_volume]', 
+                     src_vref['size'], volume['id'])
+            LOG.info('Cloned volume size %s [volume_id: %s] [func: create_cloned_volume]', 
+                     volume['size'], volume['id'])
             # Handle size after clone
             if volume['size'] != src_vref['size']:
-                LOG.info('Resizing cloned volume to %sGB', volume['size'])
+                LOG.info('Resizing cloned volume to %sGB [volume_id: %s] [func: create_cloned_volume]', 
+                         volume['size'], volume['id'])
                 cloned_rsc = _get_existing_resource(
                     self.c.get(),
                     volume['name'],
@@ -826,7 +850,8 @@ class LinstorDriver(driver.VolumeDriver):
     def copy_image_to_volume(self, context, volume, image_service, image_id,
                              disable_sparse=False):
         """Copy an image to a volume"""
-        LOG.info('Copying image to volume %s', volume['name'])
+        LOG.info('Copying image to volume %s [volume_id: %s] [func: copy_image_to_volume]', 
+                 volume['name'], volume['id'])
         rsc = _get_existing_resource(self.c.get(), volume['name'],
                                      volume['id'])
 
@@ -846,7 +871,9 @@ class LinstorDriver(driver.VolumeDriver):
     @wrap_linstor_api_exception
     @volume_utils.trace
     def copy_volume_to_image(self, context, volume, image_service, image_meta):
-        LOG.info('Copying volume to image %s', volume['name'])
+        """Copy volume to image"""
+        LOG.info('Copying volume to image %s [volume_id: %s] [func: copy_volume_to_image]', 
+                 volume['name'], volume['id'])
         rsc = _get_existing_resource(
             self.c.get(),
             volume['name'],
@@ -866,9 +893,6 @@ class LinstorDriver(driver.VolumeDriver):
                                        attach_info['device']['path'],
                                        volume,
                                        compress=True)
-
-
-
 
     @wrap_linstor_api_exception
     @volume_utils.trace
