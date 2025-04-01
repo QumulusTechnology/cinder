@@ -849,24 +849,148 @@ class LinstorDriver(driver.VolumeDriver):
     @volume_utils.trace
     def copy_image_to_volume(self, context, volume, image_service, image_id,
                              disable_sparse=False):
-        """Copy an image to a volume"""
-        LOG.info('Copying image to volume %s [volume_id: %s] [func: copy_image_to_volume]', 
-                 volume['name'], volume['id'])
-        rsc = _get_existing_resource(self.c.get(), volume['name'],
-                                     volume['id'])
+        """Copy an image to a volume using image_utils.fetch_to_raw.
 
-        with _temp_resource_path(self.c.get(), rsc, self._hostname,
-                                 self._force_udev) as path:
-            image_utils.fetch_to_raw(
-                context,
-                image_service,
-                image_id,
-                path,
-                self.configuration.safe_get('dd_blocksize'),
-                size=volume['size'],
-                disable_sparse=disable_sparse
-            )
-        return {}
+        This method downloads an image from the image service and writes it directly
+        to the volume's device path. It includes progress tracking, verification,
+        and proper error handling.
+
+        :param context: The context for the request
+        :param volume: The volume to copy the image to
+        :param image_service: The image service to use
+        :param image_id: The ID of the image to copy
+        :param disable_sparse: Whether to disable sparse copying
+        :return: Empty dict on success
+        :raises: VolumeBackendAPIException if the operation fails
+        """
+        start_time = time.time()
+        LOG.info('Initiating image copy to volume %s [volume_id: %s] [func: copy_image_to_volume]', 
+                 volume['name'], volume['id'])
+
+        # Set timeout for the entire operation (5 minutes)
+        operation_timeout = 300  # 5 minutes in seconds
+        last_progress_time = time.time()
+
+        try:
+            # Get the LINSTOR resource
+            rsc_start_time = time.time()
+            rsc = _get_existing_resource(self.c.get(), volume['name'], volume['id'])
+            rsc_time = time.time() - rsc_start_time
+            LOG.info('Got LINSTOR resource in %.2f seconds [volume_id: %s] [func: copy_image_to_volume]', 
+                     rsc_time, volume['id'])
+            
+            # Get the device path with proper error handling
+            try:
+                path_start_time = time.time()
+                with _temp_resource_path(self.c.get(), rsc, self._hostname,
+                                       self._force_udev) as path:
+                    path_time = time.time() - path_start_time
+                    LOG.info('Got device path %s in %.2f seconds [volume_id: %s] [func: copy_image_to_volume]', 
+                             path, path_time, volume['id'])
+                    
+                    # Get image size and verify it fits in volume
+                    try:
+                        meta_start_time = time.time()
+                        image_meta = image_service.show(context, image_id)
+                        image_size = image_meta['size']
+                        volume_size = volume['size'] * units.Gi
+                        meta_time = time.time() - meta_start_time
+                        
+                        LOG.info('Got image metadata in %.2f seconds. Size: %s [volume_id: %s] [func: copy_image_to_volume]', 
+                                 meta_time, image_size, volume['id'])
+                        
+                        if image_size > volume_size:
+                            LOG.error('Image size %s exceeds volume size %s [volume_id: %s] [func: copy_image_to_volume]', 
+                                     image_size, volume_size, volume['id'])
+                            raise exception.ImageTooBig(image_id=image_id)
+                            
+                    except Exception as e:
+                        LOG.error('Failed to get image metadata: %s [volume_id: %s] [func: copy_image_to_volume]', 
+                                 str(e), volume['id'])
+                        raise exception.ImageNotFound(image_id=image_id)
+                    
+                    # Get blocksize from config or use default
+                    blocksize = self.configuration.safe_get('dd_blocksize', '1M')
+                    LOG.info('Using blocksize %s for image copy [volume_id: %s] [func: copy_image_to_volume]', 
+                             blocksize, volume['id'])
+                    
+                    # Copy image to volume with progress tracking
+                    try:
+                        copy_start_time = time.time()
+                        LOG.info('Starting image copy to volume %s [volume_id: %s] [func: copy_image_to_volume]', 
+                                 volume['name'], volume['id'])
+                        
+                        # Create a progress monitoring thread
+                        def monitor_progress():
+                            while True:
+                                current_time = time.time()
+                                if current_time - last_progress_time > 30:  # Log progress every 30 seconds
+                                    LOG.info('Image copy still in progress... [volume_id: %s] [func: copy_image_to_volume]', 
+                                             volume['id'])
+                                    last_progress_time = current_time
+                                time.sleep(10)  # Check every 10 seconds
+                        
+                        progress_thread = threading.Thread(target=monitor_progress)
+                        progress_thread.daemon = True
+                        progress_thread.start()
+                        
+                        # Start the image copy operation
+                        image_utils.fetch_to_raw(
+                            context,
+                            image_service,
+                            image_id,
+                            path,
+                            blocksize,
+                            size=volume['size'],
+                            disable_sparse=disable_sparse
+                        )
+                        
+                        copy_time = time.time() - copy_start_time
+                        total_time = time.time() - start_time
+                        
+                        LOG.info('Successfully copied image to volume %s in %.2f seconds [volume_id: %s] [func: copy_image_to_volume]', 
+                                 volume['name'], copy_time, volume['id'])
+                        LOG.info('Total operation took %.2f seconds [volume_id: %s] [func: copy_image_to_volume]', 
+                                 total_time, volume['id'])
+                        return {}
+                        
+                    except Exception as e:
+                        copy_time = time.time() - copy_start_time
+                        LOG.error('Failed to copy image to volume after %.2f seconds: %s [volume_id: %s] [func: copy_image_to_volume]', 
+                                 copy_time, str(e), volume['id'])
+                        raise exception.VolumeBackendAPIException(
+                            data=_('Failed to copy image to volume: %s') % str(e))
+                            
+            except Exception as e:
+                path_time = time.time() - path_start_time
+                LOG.error('Failed to get device path after %.2f seconds: %s [volume_id: %s] [func: copy_image_to_volume]', 
+                          path_time, str(e), volume['id'])
+                raise exception.VolumeBackendAPIException(
+                    data=_('Failed to get device path: %s') % str(e))
+            
+        except linstor.LinstorError as e:
+            total_time = time.time() - start_time
+            LOG.error('LINSTOR error during image copy after %.2f seconds: %s [volume_id: %s] [func: copy_image_to_volume]', 
+                      total_time, str(e), volume['id'])
+            raise LinstorDriverApiException(e)
+        
+        except Exception as e:
+            total_time = time.time() - start_time
+            LOG.exception('Unexpected error during image copy after %.2f seconds [volume_id: %s] [func: copy_image_to_volume]', 
+                         total_time, volume['id'])
+            raise exception.VolumeBackendAPIException(
+                data=_('Unexpected error during image copy: %s') % str(e))
+        
+        finally:
+            # Check if operation exceeded timeout
+            if time.time() - start_time > operation_timeout:
+                LOG.error('Operation timed out after %.2f seconds [volume_id: %s] [func: copy_image_to_volume]', 
+                          operation_timeout, volume['id'])
+                # Update volume status to error
+                volume.status = 'error'
+                volume.save()
+                raise exception.VolumeBackendAPIException(
+                    data=_('Operation timed out after %d seconds') % operation_timeout)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
