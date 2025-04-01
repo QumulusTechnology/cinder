@@ -855,13 +855,28 @@ class LinstorDriver(driver.VolumeDriver):
         to the volume's device path. It includes progress tracking, verification,
         and proper error handling.
 
-        :param context: The context for the request
-        :param volume: The volume to copy the image to
-        :param image_service: The image service to use
-        :param image_id: The ID of the image to copy
-        :param disable_sparse: Whether to disable sparse copying
-        :return: Empty dict on success
-        :raises: VolumeBackendAPIException if the operation fails
+        Args:
+            context: The context for the request
+            volume: The volume to copy the image to
+            image_service: The image service to use
+            image_id: The ID of the image to copy
+            disable_sparse: Whether to disable sparse copying (default: False)
+
+        Returns:
+            Empty dict on success
+
+        Raises:
+            ImageTooBig: If the image size exceeds the volume size
+            ImageNotFound: If the image cannot be found in the image service
+            VolumeBackendAPIException: If the operation fails
+            LinstorDriverApiException: If there's an error with the LINSTOR API
+
+        Notes:
+            - Uses a default blocksize of '1M' if not configured
+            - Includes progress monitoring with 30-second interval updates
+            - Has a 5-minute timeout for the entire operation
+            - Verifies image size before copying
+            - Logs detailed timing information for each operation step
         """
         start_time = time.time()
         LOG.info('Initiating image copy to volume %s [volume_id: %s] [func: copy_image_to_volume]', 
@@ -909,10 +924,17 @@ class LinstorDriver(driver.VolumeDriver):
                                  str(e), volume['id'])
                         raise exception.ImageNotFound(image_id=image_id)
                     
-                    # Get blocksize from config or use default
-                    blocksize = self.configuration.safe_get('dd_blocksize') or '1M'
-                    LOG.info('Using blocksize %s for image copy [volume_id: %s] [func: copy_image_to_volume]', 
-                             blocksize, volume['id'])
+                    # Get blocksize from config or use default - More robust handling
+                    try:
+                        blocksize = self.configuration.safe_get('dd_blocksize')
+                        if not blocksize:
+                            blocksize = '1M'
+                        LOG.info('Using blocksize %s for image copy [volume_id: %s] [func: copy_image_to_volume]', 
+                                 blocksize, volume['id'])
+                    except Exception as e:
+                        LOG.warning('Failed to get blocksize from config, using default 1M: %s [volume_id: %s] [func: copy_image_to_volume]', 
+                                   str(e), volume['id'])
+                        blocksize = '1M'
                     
                     # Copy image to volume with progress tracking
                     try:
