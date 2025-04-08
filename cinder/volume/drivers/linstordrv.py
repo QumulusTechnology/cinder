@@ -712,68 +712,21 @@ class LinstorDriver(driver.VolumeDriver):
     @wrap_linstor_api_exception
     @volume_utils.trace
     def delete_snapshot(self, snapshot):
-        """Delete the given snapshot using papaya service
-
-        Uses HTTP request to papaya handler app which will handle the interaction with LINSTOR.
+        """Delete the given snapshot
         :param cinder.objects.snapshot.Snapshot snapshot: snapshot to delete
         """
         LOG.info('Deleting snapshot %s [snapshot_id: %s]', snapshot['name'], snapshot['id'])
 
-        # Make HTTP request to delete snapshot with retries
-        api_url = f"http://0.0.0.0:5050/v1/snapshots"
-        headers = {'Content-Type': 'application/json'}
-        retry_delays = [2, 3, 5, 8, 13]
-        max_retries = len(retry_delays)
-        
-        # Try HTTP request with retries
-        for attempt in range(max_retries):
-            try:
-                # Create query parameters
-                query_params = {
-                    'snapshot_name': snapshot['name'],
-                    'snapshot_id': snapshot['id'],
-                    'volume_name': snapshot['volume']['name'],
-                    'volume_id': snapshot['volume_id'],
-                    'project_id': snapshot['project_id']
-                }
-                
-                LOG.info("Sending DELETE request to %s for snapshot %s (attempt %d/%d)", 
-                         api_url, snapshot['name'], attempt + 1, max_retries)
-                LOG.info("Request query parameters: %s", query_params)
-                
-                response = requests.delete(
-                    api_url, 
-                    headers=headers,
-                    params=query_params,
-                    timeout=30
-                )
-                
-                if response.status_code in (200, 202, 204):
-                    LOG.info("HTTP DELETE request successful (status: %d) for snapshot %s", 
-                             response.status_code, snapshot['name'])
-                    return {}
-                else:
-                    LOG.error("HTTP DELETE request failed with status %d: %s", 
-                              response.status_code, response.text)
-                    
-            except requests.RequestException as req_err:
-                LOG.error("HTTP request error for snapshot %s: %s", snapshot['name'], str(req_err))
-                
-            # If this is the last attempt, don't wait
-            if attempt == max_retries - 1:
-                LOG.exception('Failed to delete snapshot %s after %d attempts via HTTP request to papaya handler', 
-                            snapshot['name'], max_retries)
-                # Return success anyway as the snapshot might be deleted later by the cleanup process
-                return {}
-                
-            # Wait before retrying
-            wait_time = retry_delays[attempt]
-            LOG.warning("Retrying HTTP DELETE in %d seconds (attempt %d/%d)...", 
-                      wait_time, attempt + 1, max_retries)
-            time.sleep(wait_time)
-        
-        # Even if all attempts failed, return success as this will be handled by 
-        # the papaya handler's cleanup process
+        rsc = _get_existing_resource(
+            self.c.get(),
+            snapshot['volume']['name'],
+            snapshot['volume_id'],
+        )
+
+        try:
+            rsc.snapshot_delete(snapshot['name'])
+        except linstor.LinstorError:
+            raise exception.SnapshotIsBusy(snapshot['name'])
         return {}
 
     @wrap_linstor_api_exception
