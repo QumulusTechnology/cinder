@@ -634,92 +634,79 @@ class LinstorDriver(driver.VolumeDriver):
             except:
                 pass
             raise
-
+    @wrap_linstor_api_exception
+    @volume_utils.trace
     def delete_volume(self, volume):
-        drbd_rsc_name = self._drbd_resource_name_from_cinder_volume(volume)
-        rsc_list_reply = self._get_api_resource_list()
-        diskful_nodes = self._get_snapshot_nodes(drbd_rsc_name)
-        diskless_nodes = self._get_diskless_nodes(drbd_rsc_name)
+        """Delete the volume in the backend
 
-        # If autoplace was used, use Resource class
-        if self.ap_count:
+        Does not succeed if snapshots are still attached. This should already
+        be enforced in Cinder, Linstor just double checks.
+        :param cinder.objects.volume.Volume volume: the volume to delete
+        """
+        rsc = _get_existing_resource(
+            self.c.get(),
+            volume['name'],
+            volume['id'],
+        )
+        try:
+            rsc.delete(snapshots=False)
+        except linstor.LinstorError:
+            raise exception.VolumeIsBusy(volume_name=volume['name'])
 
-            rsc_reply = self._api_rsc_auto_delete(drbd_rsc_name)
-            if not rsc_reply:
-                msg = _("Error deleting an autoplaced LINSTOR resource")
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(data=msg)
-
-        # Delete all resources in a cluster manually if not autoplaced
-        else:
-            if rsc_list_reply:
-                # Remove diskless nodes first
-                if diskless_nodes:
-                    for node in diskless_nodes:
-                        rsc_reply = self._api_rsc_delete(
-                            node_name=node,
-                            rsc_name=drbd_rsc_name)
-                        if not self._check_api_reply(rsc_reply,
-                                                     noerror_only=True):
-                            msg = _("Error deleting a diskless LINSTOR rsc")
-                            LOG.error(msg)
-                            raise exception.VolumeBackendAPIException(data=msg)
-
-                # Remove diskful nodes
-                if diskful_nodes:
-                    for node in diskful_nodes:
-                        rsc_reply = self._api_rsc_delete(
-                            node_name=node,
-                            rsc_name=drbd_rsc_name)
-                        if not self._check_api_reply(rsc_reply,
-                                                     noerror_only=True):
-                            msg = _("Error deleting a LINSTOR resource")
-                            LOG.error(msg)
-                            raise exception.VolumeBackendAPIException(data=msg)
-
-                # Delete VD
-                vd_reply = self._api_volume_dfn_delete(drbd_rsc_name, 0)
-                if not vd_reply:
-                    if not self._check_api_reply(vd_reply):
-                        msg = _("Error deleting a LINSTOR volume definition")
-                        LOG.error(msg)
-                        raise exception.VolumeBackendAPIException(data=msg)
-
-                # Delete RD
-                # Will fail if snapshot exists but expected
-                self._api_rsc_dfn_delete(drbd_rsc_name)
-
-        return True
+        try:
+            rg = linstor.ResourceGroup(
+                rsc.resource_group_name,
+                existing_client=self.c.get(),
+            )
+            rg.delete()
+        except linstor.LinstorError as e:
+            LOG.debug(
+                'could not delete resource group %s, ignoring: %s',
+                rsc.resource_group_name,
+                e
+            )
 
     #
     # Snapshot
     #
+    @wrap_linstor_api_exception
+    @volume_utils.trace
     def create_snapshot(self, snapshot):
-        snap_name = self._snapshot_name_from_cinder_snapshot(snapshot)
-        rsc_name = self._drbd_resource_name_from_cinder_snapshot(snapshot)
+        """Create a snapshot
 
-        snap_reply = self._api_snapshot_create(drbd_rsc_name=rsc_name,
-                                               snapshot_name=snap_name)
+        :param cinder.objects.snapshot.Snapshot snapshot: snapshot to create
+        """
+        rsc = _get_existing_resource(
+            self.c.get(),
+            snapshot['volume']['name'],
+            snapshot['volume_id'],
+        )
+        rsc.snapshot_create(snapshot['name'])
 
-        if not snap_reply:
-            msg = 'ERROR creating a LINSTOR snapshot {}'.format(snap_name)
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(msg)
-
+    @wrap_linstor_api_exception
+    @volume_utils.trace
     def delete_snapshot(self, snapshot):
-        snapshot_name = self._snapshot_name_from_cinder_snapshot(snapshot)
-        rsc_name = self._drbd_resource_name_from_cinder_snapshot(snapshot)
+        """Delete the given snapshot
 
-        snap_reply = self._api_snapshot_delete(rsc_name, snapshot_name)
+        :param cinder.objects.snapshot.Snapshot snapshot: snapshot to delete
+        """
+        rsc = _get_existing_resource(
+            self.c.get(),
+            snapshot['volume']['name'],
+            snapshot['volume_id'],
+        )
 
-        if not snap_reply:
-            msg = 'ERROR deleting a LINSTOR snapshot {}'.format(snapshot_name)
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(msg)
+        try:
+            rsc.snapshot_delete(snapshot['name'])
+        except linstor.LinstorError:
+            raise exception.SnapshotIsBusy(snapshot['name'])
 
-        # Delete RD if no other RSC are found
-        if not self._get_snapshot_nodes(rsc_name):
-            self._api_rsc_dfn_delete(rsc_name)
+        try:
+            # This could _also_ be a snapshot created by the v1 driver, so
+            # delete it as well
+            rsc.snapshot_delete('SN_' + snapshot['id'])
+        except linstor.LinstorError:
+            raise exception.SnapshotIsBusy('SN_' + snapshot['id'])
 
     @wrap_linstor_api_exception
     @volume_utils.trace
