@@ -635,282 +635,91 @@ class LinstorDriver(driver.VolumeDriver):
                 pass
             raise
 
-    @wrap_linstor_api_exception
-    @volume_utils.trace
     def delete_volume(self, volume):
-        """Delete the volume in the backend
+        drbd_rsc_name = self._drbd_resource_name_from_cinder_volume(volume)
+        rsc_list_reply = self._get_api_resource_list()
+        diskful_nodes = self._get_snapshot_nodes(drbd_rsc_name)
+        diskless_nodes = self._get_diskless_nodes(drbd_rsc_name)
 
-        Uses HTTP request to papaya handler app which will handle the interaction with LINSTOR.
-        :param cinder.objects.volume.Volume volume: the volume to delete
-        """
-        LOG.info('Deleting volume %s', volume['name'])
+        # If autoplace was used, use Resource class
+        if self.ap_count:
 
-        # Make HTTP request to delete volume with retries
-        api_url = f"{PAPAYA_ENDPOINT}/v1/volumes"
-        headers = {'Content-Type': 'application/json'}
-        retry_delays = [2, 3, 5, 8, 13]
-        max_retries = len(retry_delays)
-        
-        # Try HTTP request with retries
-        for attempt in range(max_retries):
-            try:
-                # Create query parameters
-                query_params = {
-                    'volume_id': volume['id'],
-                    'project_id': volume['project_id']
-                }
-                
-                LOG.info("Sending DELETE request to %s for volume %s (attempt %d/%d)", 
-                         api_url, volume['name'], attempt + 1, max_retries)
-                LOG.info("Request query parameters: %s", query_params)
-                
-                response = requests.delete(
-                    api_url, 
-                    headers=headers,
-                    params=query_params,
-                    timeout=30
-                )
-                
-                if response.status_code in (200, 202, 204):
-                    LOG.info("HTTP DELETE request successful (status: %d) for volume %s", 
-                             response.status_code, volume['name'])
-                    return {}
-                else:
-                    LOG.error("HTTP DELETE request failed with status %d: %s", 
-                              response.status_code, response.text)
-                    
-            except requests.RequestException as req_err:
-                LOG.error("HTTP request error for volume %s: %s", volume['name'], str(req_err))
-                
-            # If this is the last attempt, don't wait
-            if attempt == max_retries - 1:
-                LOG.exception('Failed to delete volume %s after %d attempts via HTTP request to papaya handler', 
-                            volume['name'], max_retries)
-                # Return success anyway as the volume might be deleted later by the cleanup process
-                return {}
-                
-            # Wait before retrying
-            wait_time = retry_delays[attempt]
-            LOG.warning("Retrying HTTP DELETE in %d seconds (attempt %d/%d)...", 
-                      wait_time, attempt + 1, max_retries)
-            time.sleep(wait_time)
-        
-        # Even if all attempts failed, return success as this will be handled by 
-        # the papaya handler's cleanup process
-        return {}
+            rsc_reply = self._api_rsc_auto_delete(drbd_rsc_name)
+            if not rsc_reply:
+                msg = _("Error deleting an autoplaced LINSTOR resource")
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
 
-    @wrap_linstor_api_exception
-    @volume_utils.trace
+        # Delete all resources in a cluster manually if not autoplaced
+        else:
+            if rsc_list_reply:
+                # Remove diskless nodes first
+                if diskless_nodes:
+                    for node in diskless_nodes:
+                        rsc_reply = self._api_rsc_delete(
+                            node_name=node,
+                            rsc_name=drbd_rsc_name)
+                        if not self._check_api_reply(rsc_reply,
+                                                     noerror_only=True):
+                            msg = _("Error deleting a diskless LINSTOR rsc")
+                            LOG.error(msg)
+                            raise exception.VolumeBackendAPIException(data=msg)
+
+                # Remove diskful nodes
+                if diskful_nodes:
+                    for node in diskful_nodes:
+                        rsc_reply = self._api_rsc_delete(
+                            node_name=node,
+                            rsc_name=drbd_rsc_name)
+                        if not self._check_api_reply(rsc_reply,
+                                                     noerror_only=True):
+                            msg = _("Error deleting a LINSTOR resource")
+                            LOG.error(msg)
+                            raise exception.VolumeBackendAPIException(data=msg)
+
+                # Delete VD
+                vd_reply = self._api_volume_dfn_delete(drbd_rsc_name, 0)
+                if not vd_reply:
+                    if not self._check_api_reply(vd_reply):
+                        msg = _("Error deleting a LINSTOR volume definition")
+                        LOG.error(msg)
+                        raise exception.VolumeBackendAPIException(data=msg)
+
+                # Delete RD
+                # Will fail if snapshot exists but expected
+                self._api_rsc_dfn_delete(drbd_rsc_name)
+
+        return True
+
+    #
+    # Snapshot
+    #
     def create_snapshot(self, snapshot):
-        """Create a snapshot using papaya local handler endpoints
+        snap_name = self._snapshot_name_from_cinder_snapshot(snapshot)
+        rsc_name = self._drbd_resource_name_from_cinder_snapshot(snapshot)
 
-        :param cinder.objects.snapshot.Snapshot snapshot: snapshot to create
-        """
-        # Generate request ID
-        req_id = str(uuid.uuid4())
-        LOG.info('Creating snapshot %s [snapshot_id: %s] [volume_id: %s] [req_id: %s]', 
-                 snapshot['name'], snapshot['id'], snapshot['volume_id'], req_id)
+        snap_reply = self._api_snapshot_create(drbd_rsc_name=rsc_name,
+                                               snapshot_name=snap_name)
 
-        # Make HTTP request to create snapshot
-        api_url = f"{PAPAYA_ENDPOINT}/v1/snapshots"
-        headers = {
-            'Content-Type': 'application/json',
-            'X-Request-ID': req_id
-        }
-        
-        # Prepare request body
-        request_body = {
-            'snapshotName': snapshot['name'],
-            'snapshotID': snapshot['id'],
-            'volumeID': snapshot['volume_id']
-        }
+        if not snap_reply:
+            msg = 'ERROR creating a LINSTOR snapshot {}'.format(snap_name)
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(msg)
 
-        try:
-            # Send POST request to create snapshot
-            LOG.info('Sending snapshot creation request [req_id: %s]', req_id)
-            response = requests.post(
-                api_url,
-                headers=headers,
-                json=request_body,
-                timeout=30
-            )
-
-            if response.status_code not in (200, 202):
-                LOG.error('Failed to create snapshot: %s [req_id: %s]', response.text, req_id)
-                raise exception.VolumeBackendAPIException(
-                    data=_('Failed to create snapshot: %s') % response.text)
-
-            # Parse response to get snapshot ID
-            response_data = response.json()
-            snapshot_id = response_data.get('snapshotID')
-
-            if not snapshot_id:
-                LOG.error('No snapshot ID in response: %s [req_id: %s]', response.text, req_id)
-                raise exception.VolumeBackendAPIException(
-                    data=_('No snapshot ID in response'))
-
-            # Poll for snapshot status every 3 seconds with 1 minute timeout
-            start_time = time.time()
-            timeout = 90  # 90 seconds timeout
-            poll_interval = 5  # 5 seconds between polls
-
-            while True:
-                # Check if we've exceeded timeout
-                if time.time() - start_time > timeout:
-                    LOG.error('Timeout waiting for snapshot creation after %d seconds [req_id: %s]', 
-                             timeout, req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Timeout waiting for snapshot creation'))
-
-                # Wait before polling
-                time.sleep(poll_interval)
-
-                # Check snapshot status
-                status_url = f"{PAPAYA_ENDPOINT}/v1/snapshots/status"
-                status_params = {
-                    'snapshot_id': snapshot_id,
-                    'volume_id': snapshot['volume_id']
-                }
-
-                LOG.debug('Checking snapshot status [req_id: %s]', req_id)
-                status_response = requests.get(
-                    status_url,
-                    params=status_params,
-                    headers={'X-Request-ID': req_id},
-                    timeout=30
-                )
-
-                if status_response.status_code != 200:
-                    LOG.error('Failed to get snapshot status: %s [req_id: %s]', 
-                             status_response.text, req_id)
-                    continue
-
-                status_data = status_response.json()
-                
-                if status_data.get('success'):
-                    LOG.info('Snapshot %s created successfully [req_id: %s]', 
-                            snapshot['name'], req_id)
-                    return
-                
-                # If we get here, snapshot is still being created
-                LOG.debug('Snapshot creation in progress... [req_id: %s]', req_id)
-
-        except requests.RequestException as e:
-            LOG.error('Request error creating snapshot: %s [req_id: %s]', str(e), req_id)
-            raise exception.VolumeBackendAPIException(
-                data=_('Request error creating snapshot: %s') % str(e))
-        except Exception as e:
-            LOG.error('Unexpected error creating snapshot: %s [req_id: %s]', str(e), req_id)
-            raise exception.VolumeBackendAPIException(
-                data=_('Unexpected error creating snapshot: %s') % str(e))
-
-    @wrap_linstor_api_exception
-    @volume_utils.trace
     def delete_snapshot(self, snapshot):
-        """Delete the given snapshot using papaya local handler endpoints
-        :param cinder.objects.snapshot.Snapshot snapshot: snapshot to delete
-        """
-        # Generate request ID
-        req_id = str(uuid.uuid4())
-        LOG.info('Starting snapshot deletion [snapshot_name: %s] [snapshot_id: %s] [volume_id: %s] [req_id: %s]', 
-                 snapshot['name'], snapshot['id'], snapshot['volume_id'], req_id)
+        snapshot_name = self._snapshot_name_from_cinder_snapshot(snapshot)
+        rsc_name = self._drbd_resource_name_from_cinder_snapshot(snapshot)
 
-        # Make HTTP request to delete snapshot
-        api_url = f"{PAPAYA_ENDPOINT}/v1/snapshots"
-        headers = {
-            'Content-Type': 'application/json',
-            'X-Request-ID': req_id
-        }
-        
-        # Prepare request body
-        request_body = {
-            'snapshotID': snapshot['id'],
-            'volumeID': snapshot['volume_id']
-        }
+        snap_reply = self._api_snapshot_delete(rsc_name, snapshot_name)
 
-        try:
-            # Send DELETE request to delete snapshot
-            LOG.info('Sending snapshot deletion request to %s [req_id: %s]', api_url, req_id)
-            response = requests.delete(
-                api_url,
-                headers=headers,
-                json=request_body,
-                timeout=30
-            )
+        if not snap_reply:
+            msg = 'ERROR deleting a LINSTOR snapshot {}'.format(snapshot_name)
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(msg)
 
-            if response.status_code not in (200, 202):
-                LOG.error('Failed to delete snapshot. Status: %d, Response: %s [req_id: %s]', 
-                         response.status_code, response.text, req_id)
-                raise exception.VolumeBackendAPIException(
-                    data=_('Failed to delete snapshot: %s') % response.text)
-
-            # Parse response
-            response_data = response.json()
-            
-            if response_data.get('status') == 'error':
-                error_msg = response_data.get('message', 'Unknown error')
-                LOG.error('Error in deletion response: %s [req_id: %s]', error_msg, req_id)
-                raise exception.VolumeBackendAPIException(
-                    data=_('Error deleting snapshot: %s') % error_msg)
-
-            LOG.info('Initial deletion request successful, starting status polling [req_id: %s]', req_id)
-
-            # Poll for snapshot deletion status every 5 seconds with 90 seconds timeout
-            start_time = time.time()
-            timeout = 90  # 90 seconds timeout
-            poll_interval = 5  # 5 seconds between polls
-
-            while True:
-                # Check if we've exceeded timeout
-                if time.time() - start_time > timeout:
-                    LOG.error('Timeout waiting for snapshot deletion after %d seconds [req_id: %s]', 
-                             timeout, req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Timeout waiting for snapshot deletion'))
-
-                # Wait before polling
-                time.sleep(poll_interval)
-
-                # Check snapshot status
-                status_url = f"{PAPAYA_ENDPOINT}/v1/snapshots/status"
-                status_params = {
-                    'snapshot_id': snapshot['id'],
-                    'volume_id': snapshot['volume_id']
-                }
-
-                LOG.debug('Polling snapshot deletion status [req_id: %s]', req_id)
-                status_response = requests.get(
-                    status_url,
-                    params=status_params,
-                    headers={'X-Request-ID': req_id},
-                    timeout=30
-                )
-
-                if status_response.status_code != 200:
-                    LOG.error('Failed to get snapshot status. Status: %d, Response: %s [req_id: %s]', 
-                             status_response.status_code, status_response.text, req_id)
-                    continue
-
-                status_data = status_response.json()
-                
-                # If snapshot is not found in the list, it means it was successfully deleted
-                if not status_data.get('snapshots') or snapshot['id'] not in status_data.get('snapshots', []):
-                    LOG.info('Snapshot deletion completed successfully [snapshot_name: %s] [req_id: %s]', 
-                            snapshot['name'], req_id)
-                    return {}
-                
-                # If we get here, snapshot is still being deleted
-                LOG.debug('Snapshot deletion still in progress [snapshot_name: %s] [req_id: %s]', 
-                         snapshot['name'], req_id)
-
-        except requests.RequestException as e:
-            LOG.error('Request error during snapshot deletion: %s [req_id: %s]', str(e), req_id)
-            raise exception.VolumeBackendAPIException(
-                data=_('Request error deleting snapshot: %s') % str(e))
-        except Exception as e:
-            LOG.error('Unexpected error during snapshot deletion: %s [req_id: %s]', str(e), req_id)
-            raise exception.VolumeBackendAPIException(
-                data=_('Unexpected error deleting snapshot: %s') % str(e))
+        # Delete RD if no other RSC are found
+        if not self._get_snapshot_nodes(rsc_name):
+            self._api_rsc_dfn_delete(rsc_name)
 
     @wrap_linstor_api_exception
     @volume_utils.trace
