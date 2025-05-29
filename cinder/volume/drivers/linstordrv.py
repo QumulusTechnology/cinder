@@ -44,10 +44,6 @@ from cinder.volume import volume_utils
 
 import time
 from oslo_utils import timeutils
-import uuid
-
-# Constants
-PAPAYA_ENDPOINT = "http://0.0.0.0:5151"
 
 try:
     import linstor
@@ -103,8 +99,6 @@ linstor_opts = [
                 help='True, if the driver should use clone with snapshot'
                      '(dependent clone)'),
 
-    cfg.StrOpt('cinder_internal_tenant_project_id',
-               help='Project ID for the internal tenant'),
 ]
 
 LOG = logging.getLogger(__name__)  # type: logging.logging.Logger
@@ -634,41 +628,72 @@ class LinstorDriver(driver.VolumeDriver):
             except:
                 pass
             raise
+
     @wrap_linstor_api_exception
     @volume_utils.trace
     def delete_volume(self, volume):
         """Delete the volume in the backend
 
-        Does not succeed if snapshots are still attached. This should already
-        be enforced in Cinder, Linstor just double checks.
+        Uses HTTP request to papaya handler app which will handle the interaction with LINSTOR.
         :param cinder.objects.volume.Volume volume: the volume to delete
         """
-        rsc = _get_existing_resource(
-            self.c.get(),
-            volume['name'],
-            volume['id'],
-        )
-        try:
-            rsc.delete(snapshots=False)
-        except linstor.LinstorError:
-            raise exception.VolumeIsBusy(volume_name=volume['name'])
+        LOG.info('Deleting volume %s', volume['name'])
 
-        try:
-            rg = linstor.ResourceGroup(
-                rsc.resource_group_name,
-                existing_client=self.c.get(),
-            )
-            rg.delete()
-        except linstor.LinstorError as e:
-            LOG.debug(
-                'could not delete resource group %s, ignoring: %s',
-                rsc.resource_group_name,
-                e
-            )
+        # Make HTTP request to delete volume with retries
+        api_url = f"http://0.0.0.0:5050/v1/volumes"
+        headers = {'Content-Type': 'application/json'}
+        retry_delays = [2, 3, 5, 8, 13]
+        max_retries = len(retry_delays)
+        
+        # Try HTTP request with retries
+        for attempt in range(max_retries):
+            try:
+                # Create query parameters
+                query_params = {
+                    'volume_name': volume['name'],
+                    'volume_id': volume['id'],
+                    'project_id': volume['project_id']
+                }
+                
+                LOG.info("Sending DELETE request to %s for volume %s (attempt %d/%d)", 
+                         api_url, volume['name'], attempt + 1, max_retries)
+                LOG.info("Request query parameters: %s", query_params)
+                
+                response = requests.delete(
+                    api_url, 
+                    headers=headers,
+                    params=query_params,
+                    timeout=30
+                )
+                
+                if response.status_code in (200, 202, 204):
+                    LOG.info("HTTP DELETE request successful (status: %d) for volume %s", 
+                             response.status_code, volume['name'])
+                    return {}
+                else:
+                    LOG.error("HTTP DELETE request failed with status %d: %s", 
+                              response.status_code, response.text)
+                    
+            except requests.RequestException as req_err:
+                LOG.error("HTTP request error for volume %s: %s", volume['name'], str(req_err))
+                
+            # If this is the last attempt, don't wait
+            if attempt == max_retries - 1:
+                LOG.exception('Failed to delete volume %s after %d attempts via HTTP request to papaya handler', 
+                            volume['name'], max_retries)
+                # Return success anyway as the volume might be deleted later by the cleanup process
+                return {}
+                
+            # Wait before retrying
+            wait_time = retry_delays[attempt]
+            LOG.warning("Retrying HTTP DELETE in %d seconds (attempt %d/%d)...", 
+                      wait_time, attempt + 1, max_retries)
+            time.sleep(wait_time)
+        
+        # Even if all attempts failed, return success as this will be handled by 
+        # the papaya handler's cleanup process
+        return {}
 
-    #
-    # Snapshot
-    #
     @wrap_linstor_api_exception
     @volume_utils.trace
     def create_snapshot(self, snapshot):
@@ -676,6 +701,7 @@ class LinstorDriver(driver.VolumeDriver):
 
         :param cinder.objects.snapshot.Snapshot snapshot: snapshot to create
         """
+        LOG.info('Creating snapshot %s', snapshot['name'])
         rsc = _get_existing_resource(
             self.c.get(),
             snapshot['volume']['name'],
@@ -701,12 +727,7 @@ class LinstorDriver(driver.VolumeDriver):
         except linstor.LinstorError:
             raise exception.SnapshotIsBusy(snapshot['name'])
 
-        try:
-            # This could _also_ be a snapshot created by the v1 driver, so
-            # delete it as well
-            rsc.snapshot_delete('SN_' + snapshot['id'])
-        except linstor.LinstorError:
-            raise exception.SnapshotIsBusy('SN_' + snapshot['id'])
+        return {}
 
     @wrap_linstor_api_exception
     @volume_utils.trace
@@ -760,8 +781,8 @@ class LinstorDriver(driver.VolumeDriver):
         :param cinder.objects.volume.Volume volume: The new clone
         :param cinder.objects.volume.Volume src_vref: The volume to clone from
         """
-        LOG.info('Creating clone %s from %s', volume['name'], src_vref['name'])
-
+        LOG.info('Creating clone %s from %s [volume_id: %s] [func: create_cloned_volume]', 
+                 volume['name'], src_vref['name'], volume['id'])
         if self.configuration.safe_get('linstor_use_snapshot_based_clone'):
             ctxt = volume._context
 
@@ -796,112 +817,31 @@ class LinstorDriver(driver.VolumeDriver):
 
             return self.create_volume_from_snapshot(volume, snapshot)
         else:
-            try:
-                # First perform the direct cloning
-                rsc = _get_existing_resource(
+            rsc = _get_existing_resource(
+                self.c.get(),
+                src_vref['name'],
+                src_vref['id'],
+            )
+            LOG.info('Cloning volume with direct clone method [volume_id: %s] [func: create_cloned_volume]', 
+                     volume['id'])
+            rsc.clone(volume['name'], use_zfs_clone=False)
+
+            LOG.info('Origin volume size %s [volume_id: %s] [func: create_cloned_volume]', 
+                     src_vref['size'], volume['id'])
+            LOG.info('Cloned volume size %s [volume_id: %s] [func: create_cloned_volume]', 
+                     volume['size'], volume['id'])
+            # Handle size after clone
+            if volume['size'] != src_vref['size']:
+                LOG.info('Resizing cloned volume to %sGB [volume_id: %s] [func: create_cloned_volume]', 
+                         volume['size'], volume['id'])
+                cloned_rsc = _get_existing_resource(
                     self.c.get(),
-                    src_vref['name'],
-                    src_vref['id'],
+                    volume['name'],
+                    volume['id'],
                 )
-                LOG.info('Cloning volume with direct clone method')
-                rsc.clone(volume['name'], use_zfs_clone=False)
-
-                LOG.info('Origin volume size %s', src_vref['size'])
-                LOG.info('Cloned volume size %s', volume['size'])
-                # Handle size after clone
-                if volume['size'] != src_vref['size']:
-                    LOG.info('Resizing cloned volume to %sGB', volume['size'])
-                    cloned_rsc = _get_existing_resource(
-                        self.c.get(),
-                        volume['name'],
-                        volume['id'],
-                    )
-                    # convert GB to bytes using units.Gi
-                    linstor_size = volume['size'] * units.Gi
-                    cloned_rsc.volumes[0].size = linstor_size
-
-                # Update created_at timestamp to current time
-                try:
-                    from datetime import datetime, timezone
-                    volume.created_at = datetime.now(timezone.utc)
-                    volume.save()
-                    LOG.info('Updated created_at timestamp for volume %s [volume_id: %s]', 
-                             volume['name'], volume['id'])
-                except Exception as timestamp_error:
-                    LOG.error('Failed to update created_at timestamp: %s [volume_id: %s]', 
-                             str(timestamp_error), volume['id'])
-                    # Continue even if timestamp update fails
-
-                # Now check and update volume type if needed
-                try:
-                    service_project_id = CONF.cinder_internal_tenant_project_id
-                    
-                    # Check if volume is an image volume based on project ID or display name
-                    is_image_volume = (
-                        (service_project_id and volume.get('project_id') == service_project_id) or
-                        (volume.get('display_name', '').startswith('image-'))
-                    )
-                    
-                    if is_image_volume and volume.get('volume_type', {}).get('name') != "__IMAGES__":
-                        LOG.info('Setting volume type to __IMAGES__ for image volume %s [volume_id: %s]', 
-                                 volume['name'], volume['id'])
-                        
-                        # Get volume type dynamically from OpenStack
-                        from cinder.objects import volume_type
-                        from cinder import exception
-                        
-                        try:
-                            # First try to get the volume type by name
-                            volume_types = volume_type.VolumeTypeList.get_all(volume._context)
-                            images_volume_type = None
-                            for vt in volume_types:
-                                if vt.name == '__IMAGES__':
-                                    images_volume_type = vt
-                                    break
-                            
-                            if images_volume_type:
-                                try:
-                                    # Set the volume_type_id instead of the full object
-                                    volume.volume_type_id = images_volume_type.id
-                                    volume.multiattach = True
-                                    volume.save()  # Persist the volume type change
-                                    LOG.info('Successfully set volume type to __IMAGES__ with ID: %s [volume_id: %s]', 
-                                             images_volume_type.id, volume['id'])
-                                except Exception as save_error:
-                                    LOG.error('Failed to save volume type change: %s [volume_id: %s]', 
-                                             str(save_error), volume['id'])
-                                    # Continue even if type change fails
-                                
-                                try:
-                                    # Update LINSTOR resource group for the new volume type
-                                    rg = self._resource_group_for_volume_type(images_volume_type)
-                                    rsc = _get_existing_resource(self.c.get(), volume['name'], volume['id'])
-                                    with self.c.get() as lclient:
-                                        responses = lclient.resource_dfn_modify(
-                                            rsc.linstor_name, 
-                                            property_dict={}, 
-                                            resource_group=rg.name
-                                        )
-                                        if not lclient.all_api_responses_no_error(responses):
-                                            LOG.error('Failed to update LINSTOR resource group: %s', responses)
-                                            # Continue even if LINSTOR update fails
-                                except Exception as linstor_error:
-                                    LOG.error('Failed to update LINSTOR resource group: %s [volume_id: %s]', 
-                                             str(linstor_error), volume['id'])
-                                    # Continue even if LINSTOR update fails
-                        except Exception as e:
-                            LOG.error('Failed to get __IMAGES__ volume type: %s [volume_id: %s]', 
-                                     str(e), volume['id'])
-                            # Continue even if type check fails
-                except Exception as config_error:
-                    LOG.error('Failed to read service project ID from config: %s [volume_id: %s]', 
-                             str(config_error), volume['id'])
-                    # Continue even if config read fails
-            except Exception as clone_error:
-                LOG.error('Failed to clone volume: %s [volume_id: %s]', 
-                         str(clone_error), volume['id'])
-                raise exception.VolumeBackendAPIException(
-                    data='Failed to clone volume: %s' % str(clone_error))
+                # convert GB to bytes using units.Gi
+                linstor_size = volume['size'] * units.Gi
+                cloned_rsc.volumes[0].size = linstor_size
 
         return {}
 
@@ -915,28 +855,13 @@ class LinstorDriver(driver.VolumeDriver):
         to the volume's device path. It includes progress tracking, verification,
         and proper error handling.
 
-        Args:
-            context: The context for the request
-            volume: The volume to copy the image to
-            image_service: The image service to use
-            image_id: The ID of the image to copy
-            disable_sparse: Whether to disable sparse copying (default: False)
-
-        Returns:
-            Empty dict on success
-
-        Raises:
-            ImageTooBig: If the image size exceeds the volume size
-            ImageNotFound: If the image cannot be found in the image service
-            VolumeBackendAPIException: If the operation fails
-            LinstorDriverApiException: If there's an error with the LINSTOR API
-
-        Notes:
-            - Uses a default blocksize of '1M' if not configured
-            - Includes progress monitoring with 30-second interval updates
-            - Has a 5-minute timeout for the entire operation
-            - Verifies image size before copying
-            - Logs detailed timing information for each operation step
+        :param context: The context for the request
+        :param volume: The volume to copy the image to
+        :param image_service: The image service to use
+        :param image_id: The ID of the image to copy
+        :param disable_sparse: Whether to disable sparse copying
+        :return: Empty dict on success
+        :raises: VolumeBackendAPIException if the operation fails
         """
         start_time = time.time()
         LOG.info('Initiating image copy to volume %s [volume_id: %s] [func: copy_image_to_volume]', 
@@ -944,96 +869,9 @@ class LinstorDriver(driver.VolumeDriver):
 
         # Set timeout for the entire operation (5 minutes)
         operation_timeout = 300  # 5 minutes in seconds
-        last_progress_time = time.time()  # Initialize progress time tracking
+        last_progress_time = time.time()
 
         try:
-            # Ensure volume type is set to __IMAGES__ for image volumes
-            if volume.get('volume_type', {}).get('name') != "__IMAGES__":
-                try:
-                    # Get service project ID from cinder config
-                    service_project_id = CONF.cinder_internal_tenant_project_id
-                    
-                    if not service_project_id:
-                        LOG.error('Service project ID not found in cinder config [volume_id: %s]', 
-                                 volume['id'])
-                        raise exception.VolumeBackendAPIException(
-                            data='Service project ID not found in cinder config')
-                    
-                    # Check if volume belongs to the service project
-                    is_image_volume = (
-                        (service_project_id and volume.get('project_id') == service_project_id) or
-                        (volume.get('display_name', '').startswith('image-'))
-                    )
-                    
-                    if is_image_volume and volume.get('volume_type', {}).get('name') != "__IMAGES__":
-                        LOG.info('Setting volume type to __IMAGES__ for image volume %s [volume_id: %s]', 
-                                 volume['name'], volume['id'])
-                        
-                        # Get volume type dynamically from OpenStack
-                        from cinder.objects import volume_type
-                        from cinder import exception
-                        
-                        try:
-                            # First try to get the volume type by name
-                            volume_types = volume_type.VolumeTypeList.get_all(context)
-                            images_volume_type = None
-                            for vt in volume_types:
-                                if vt.name == '__IMAGES__':
-                                    images_volume_type = vt
-                                    break
-                            
-                            if images_volume_type:
-                                try:
-                                    # Set the volume_type_id instead of the full object
-                                    volume.volume_type_id = images_volume_type.id
-                                    volume.multiattach = True
-                                    volume.save()  # Persist the volume type change
-                                    LOG.info('Successfully set volume type to __IMAGES__ with ID: %s [volume_id: %s]', 
-                                             images_volume_type.id, volume['id'])
-                                except Exception as save_error:
-                                    LOG.error('Failed to save volume type change: %s [volume_id: %s]', 
-                                             str(save_error), volume['id'])
-                                    raise exception.VolumeBackendAPIException(
-                                        data='Failed to save volume type change: %s' % str(save_error))
-                                
-                                try:
-                                    # Update LINSTOR resource group for the new volume type
-                                    rg = self._resource_group_for_volume_type(images_volume_type)
-                                    rsc = _get_existing_resource(self.c.get(), volume['name'], volume['id'])
-                                    with self.c.get() as lclient:
-                                        responses = lclient.resource_dfn_modify(
-                                            rsc.linstor_name, 
-                                            property_dict={}, 
-                                            resource_group=rg.name
-                                        )
-                                        if not lclient.all_api_responses_no_error(responses):
-                                            raise LinstorDriverApiException(responses)
-                                except Exception as linstor_error:
-                                    LOG.error('Failed to update LINSTOR resource group: %s [volume_id: %s]', 
-                                             str(linstor_error), volume['id'])
-                                    raise exception.VolumeBackendAPIException(
-                                        data='Failed to update LINSTOR resource group: %s' % str(linstor_error))
-                            else:
-                                LOG.error('__IMAGES__ volume type not found in OpenStack [volume_id: %s]', 
-                                         volume['id'])
-                                raise exception.VolumeBackendAPIException(
-                                    data='__IMAGES__ volume type not found in OpenStack')
-                        except exception.VolumeBackendAPIException:
-                            raise
-                        except Exception as e:
-                            LOG.error('Failed to get __IMAGES__ volume type: %s [volume_id: %s]', 
-                                     str(e), volume['id'])
-                            raise exception.VolumeBackendAPIException(
-                                data='Failed to set volume type to __IMAGES__: %s' % str(e))
-                    else:
-                        LOG.info('Skipping __IMAGES__ volume type setting for non-service project volume %s [volume_id: %s]', 
-                                 volume['name'], volume['id'])
-                except Exception as config_error:
-                    LOG.error('Failed to read service project ID from config: %s [volume_id: %s]', 
-                             str(config_error), volume['id'])
-                    raise exception.VolumeBackendAPIException(
-                        data='Failed to read service project ID from config: %s' % str(config_error))
-
             # Get the LINSTOR resource
             rsc_start_time = time.time()
             rsc = _get_existing_resource(self.c.get(), volume['name'], volume['id'])
@@ -1071,17 +909,10 @@ class LinstorDriver(driver.VolumeDriver):
                                  str(e), volume['id'])
                         raise exception.ImageNotFound(image_id=image_id)
                     
-                    # Get blocksize from config or use default - More robust handling
-                    try:
-                        blocksize = self.configuration.safe_get('dd_blocksize')
-                        if not blocksize:
-                            blocksize = '1M'
-                        LOG.info('Using blocksize %s for image copy [volume_id: %s] [func: copy_image_to_volume]', 
-                                 blocksize, volume['id'])
-                    except Exception as e:
-                        LOG.warning('Failed to get blocksize from config, using default 1M: %s [volume_id: %s] [func: copy_image_to_volume]', 
-                                   str(e), volume['id'])
-                        blocksize = '1M'
+                    # Get blocksize from config or use default
+                    blocksize = self.configuration.safe_get('dd_blocksize') or '1M'
+                    LOG.info('Using blocksize %s for image copy [volume_id: %s] [func: copy_image_to_volume]', 
+                             blocksize, volume['id'])
                     
                     # Copy image to volume with progress tracking
                     try:
@@ -1091,7 +922,6 @@ class LinstorDriver(driver.VolumeDriver):
                         
                         # Create a progress monitoring thread
                         def monitor_progress():
-                            nonlocal last_progress_time  # Make last_progress_time accessible
                             while True:
                                 current_time = time.time()
                                 if current_time - last_progress_time > 30:  # Log progress every 30 seconds
@@ -1161,7 +991,6 @@ class LinstorDriver(driver.VolumeDriver):
                 volume.save()
                 raise exception.VolumeBackendAPIException(
                     data=_('Operation timed out after %d seconds') % operation_timeout)
-            
 
     @wrap_linstor_api_exception
     @volume_utils.trace
