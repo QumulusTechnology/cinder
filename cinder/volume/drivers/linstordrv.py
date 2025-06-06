@@ -511,6 +511,24 @@ class LinstorDriver(driver.VolumeDriver):
         LOG.info('Starting volume creation from snapshot [volume_name: %s] [volume_id: %s] [snapshot_name: %s] [snapshot_id: %s] [req_id: %s]', 
                  volume['name'], volume['id'], snapshot['name'], snapshot['id'], req_id)
 
+        LOG.info('Creating volume %s [volume_id: %s] [func: create_volume_from_snapshot] [req_id: %s]', 
+                 volume['name'], volume['id'], req_id)
+        LOG.info('Volume size %s [volume_id: %s] [func: create_volume_from_snapshot] [req_id: %s]', 
+                 volume['size'], volume['id'])
+        linstor_size = volume['size'] * units.Gi // units.Ki
+        LOG.info('LINSTOR size %s [volume_id: %s] [func: create_volume_from_snapshot] [req_id: %s]', 
+                 linstor_size, volume['id'], req_id)
+
+        rg = self._resource_group_for_volume_type(volume['volume_type'])
+        linstor.Resource.from_resource_group(
+            uri="[unused]",
+            resource_group_name=rg.name,
+            resource_name=volume['name'],
+            vlm_sizes=[linstor_size],
+            existing_client=self.c.get(),
+        )
+
+
         # Make HTTP request to restore snapshot
         api_url = f"{PAPAYA_ENDPOINT}/v1/snapshots/restore"
         headers = {
