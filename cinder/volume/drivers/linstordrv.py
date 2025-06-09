@@ -562,18 +562,23 @@ class LinstorDriver(driver.VolumeDriver):
             # Parse response
             response_data = response.json()
             
+            # Debug: Log the actual response received
+            LOG.info("Full API response received [req_id: %s]: %s", req_id, response_data)
+            LOG.info("Response keys available [req_id: %s]: %s", req_id, list(response_data.keys()))
+            
             if not response_data.get('success'):
                 error_msg = response_data.get('message', 'Unknown error')
                 LOG.error('Error in restore response: %s [req_id: %s]', error_msg, req_id)
                 raise exception.VolumeBackendAPIException(
                     data=_('Error restoring snapshot: %s') % error_msg)
 
-            # Get restore ID from response
-            restore_id = response_data.get('restoreID')
+            # Get restore ID from response - try multiple possible field names
+            restore_id = response_data.get("restoreID")
             if not restore_id:
-                LOG.error('No restore ID in response: %s [req_id: %s]', response.text, req_id)
+                LOG.error("No restore ID in response. Available fields: %s, Full response: %s [req_id: %s]", 
+                         list(response_data.keys()), response_data, req_id)
                 raise exception.VolumeBackendAPIException(
-                    data=_('No restore ID in response'))
+                    data=_("No restore ID in response. Available fields: %s") % list(response_data.keys()))
 
             workflow_id = response_data.get('workflowID')
             LOG.info('Initial restore request successful, restore ID: %s, workflow ID: %s [req_id: %s]', 
