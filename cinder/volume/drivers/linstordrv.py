@@ -578,70 +578,30 @@ class LinstorDriver(driver.VolumeDriver):
             LOG.info('Initial restore request successful, restore ID: %s, workflow ID: %s [req_id: %s]', 
                     restore_id, workflow_id, req_id)
 
-            # Poll for restoration completion with exponential backoff
-            start_time = time.time()
-            timeout = 600  # 10 minutes timeout
-            poll_interval = 30  # Start with 30 seconds
-            max_poll_interval = 120  # Cap at 2 minutes
-            backoff_multiplier = 1.5  # Exponential backoff multiplier
-
-            while True:
-                # Check if we've exceeded timeout
-                elapsed_time = time.time() - start_time
-                if elapsed_time > timeout:
-                    LOG.error('Timeout waiting for snapshot restore after %d seconds [req_id: %s]', 
-                             timeout, req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Timeout waiting for snapshot restore'))
-
-                # Wait before polling
-                LOG.debug('Waiting %d seconds before polling restore status [req_id: %s]', poll_interval, req_id)
-                time.sleep(poll_interval)
-
-                # Check restore status
-                status_url = f"{PAPAYA_ENDPOINT}/v1/snapshots/restore/status"
-                status_params = {
-                    'restore_id': restore_id
+            # Set volume status to restoring and return immediately
+            # The cloud/external system will update status to 'available' once restore completes
+            try:
+                volume.status = 'restoring'
+                volume.save()
+                LOG.info('Volume status set to "restoring" for async restore operation [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+                        volume['name'], restore_id, req_id)
+            except Exception as status_error:
+                LOG.warning('Failed to update volume status to "restoring": %s [req_id: %s]', 
+                           str(status_error), req_id)
+                # Continue even if status update fails
+            
+            # Return model update to indicate operation was initiated successfully
+            LOG.info('Volume creation from snapshot initiated successfully - returning control to cloud [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+                    volume['name'], restore_id, req_id)
+            
+            return {
+                'metadata': {
+                    'restore_id': restore_id,
+                    'workflow_id': workflow_id,
+                    'request_id': req_id,
+                    'restore_initiated_at': timeutils.utcnow().isoformat()
                 }
-
-                LOG.debug('Polling restore status with restore_id: %s [req_id: %s]', restore_id, req_id)
-                status_response = requests.get(
-                    status_url,
-                    params=status_params,
-                    headers={'X-Request-ID': req_id},
-                    timeout=30
-                )
-
-                if status_response.status_code != 200:
-                    LOG.error('Failed to get restore status. Status: %d, Response: %s [req_id: %s]', 
-                             status_response.status_code, status_response.text, req_id)
-                    
-                    # Increase poll interval with exponential backoff and continue
-                    poll_interval = min(int(poll_interval * backoff_multiplier), max_poll_interval)
-                    continue
-
-                status_data = status_response.json()
-                
-                # Check if restore completed successfully
-                if status_data.get('success'):
-                    LOG.info('Volume creation from snapshot completed successfully [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                            volume['name'], restore_id, req_id)
-                    return {}
-                
-                # Check if restore failed
-                if status_data.get('success') is False:
-                    error_msg = status_data.get('message', 'Restore operation failed')
-                    LOG.error('Volume creation from snapshot failed: %s [restore_id: %s] [req_id: %s]', 
-                             error_msg, restore_id, req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Volume creation from snapshot failed: %s') % error_msg)
-                
-                # If we get here, restore is still in progress
-                LOG.debug('Volume creation from snapshot still in progress [volume_name: %s] [restore_id: %s] [elapsed: %.1f seconds] [req_id: %s]', 
-                         volume['name'], restore_id, elapsed_time, req_id)
-                
-                # Increase poll interval with exponential backoff
-                poll_interval = min(int(poll_interval * backoff_multiplier), max_poll_interval)
+            }
 
         except requests.RequestException as e:
             LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
