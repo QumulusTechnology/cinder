@@ -607,7 +607,7 @@ class LinstorDriver(driver.VolumeDriver):
             # Return empty dict to keep the volume in its current state (creating).
             # An external system is expected to monitor for completion and update the
             # volume status to 'available'.
-            return {'status': 'restoring-backup'}
+            return {}
 
         except requests.RequestException as e:
             LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
