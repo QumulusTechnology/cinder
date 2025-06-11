@@ -600,14 +600,47 @@ class LinstorDriver(driver.VolumeDriver):
                 LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
             
             # Keep volume in creating state - external system will update to available when done
-            LOG.info('Restore initiated successfully. Volume will remain in "creating" state. '
+            LOG.info('Restore initiated successfully. Polling for completion... '
                      '[volume_name: %s] [restore_id: %s] [req_id: %s]',
                      volume['name'], restore_id, req_id)
-            
-            # Return empty dict to keep the volume in its current state (creating).
-            # An external system is expected to monitor for completion and update the
-            # volume status to 'available'.
-            return {}
+
+            start_time = time.time()
+            max_wait_time = 3600  # 1 hour timeout
+            check_interval = 30  # Check every 60 seconds
+
+            while True:
+                elapsed = time.time() - start_time
+                if elapsed > max_wait_time:
+                    LOG.error('Timeout waiting for volume to become available after 1 hour '
+                              '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                              volume['name'], restore_id, req_id)
+                    raise exception.VolumeBackendAPIException(
+                        data=_('Timeout waiting for volume to become available'))
+
+                time.sleep(check_interval)
+
+                try:
+                    volume.refresh()
+                except Exception as refresh_error:
+                    LOG.warning('Failed to refresh volume during polling: %s [req_id: %s]',
+                                str(refresh_error), req_id)
+                    continue
+
+                LOG.debug('Polling: current volume status is "%s" [elapsed: %.1f minutes] '
+                          '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                          volume.status, elapsed / 60, volume['name'], restore_id, req_id)
+
+                if volume.status == 'available':
+                    LOG.info('Volume is now available. Restore completed. '
+                             '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                             volume['name'], restore_id, req_id)
+                    return {}
+                elif volume.status == 'error':
+                    LOG.error('Volume entered "error" state during restore. '
+                              '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                              volume['name'], restore_id, req_id)
+                    raise exception.VolumeBackendAPIException(
+                        data=_('Volume restore failed, status changed to error.'))
 
         except requests.RequestException as e:
             LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
