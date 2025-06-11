@@ -578,28 +578,19 @@ class LinstorDriver(driver.VolumeDriver):
             LOG.info('Initial restore request successful, restore ID: %s, workflow ID: %s [req_id: %s]', 
                     restore_id, workflow_id, req_id)
 
-            # Set volume status to restoring and return immediately
-            # The cloud/external system will update status to 'available' once restore completes
-            try:
-                volume.status = 'restoring'
-                volume.save()
-                LOG.info('Volume status set to "restoring" for async restore operation [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                        volume['name'], restore_id, req_id)
-            except Exception as status_error:
-                LOG.warning('Failed to update volume status to "restoring": %s [req_id: %s]', 
-                           str(status_error), req_id)
-                # Continue even if status update fails
-            
-            # Return model update to indicate operation was initiated successfully
-            LOG.info('Volume creation from snapshot initiated successfully - returning control to cloud [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+            # Return model update with explicit status to prevent Cinder from setting to "available"
+            # The external system will update status to 'available' once restore completes
+            LOG.info('Volume creation from snapshot initiated successfully - keeping in creating state [volume_name: %s] [restore_id: %s] [req_id: %s]', 
                     volume['name'], restore_id, req_id)
             
             return {
+                'status': 'creating',  # Explicitly keep in creating state
                 'metadata': {
                     'restore_id': restore_id,
                     'workflow_id': workflow_id,
                     'request_id': req_id,
-                    'restore_initiated_at': timeutils.utcnow().isoformat()
+                    'restore_initiated_at': timeutils.utcnow().isoformat(),
+                    'async_restore': 'true'
                 }
             }
 
