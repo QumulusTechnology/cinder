@@ -578,21 +578,29 @@ class LinstorDriver(driver.VolumeDriver):
             LOG.info('Initial restore request successful, restore ID: %s, workflow ID: %s [req_id: %s]', 
                     restore_id, workflow_id, req_id)
 
-            # Return model update with explicit status to prevent Cinder from setting to "available"
-            # The external system will update status to 'available' once restore completes
-            LOG.info('Volume creation from snapshot initiated successfully - keeping in creating state [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                    volume['name'], restore_id, req_id)
-            
-            return {
-                'status': 'creating',  # Explicitly keep in creating state
-                'metadata': {
+            # Store restore metadata for external monitoring
+            try:
+                volume.metadata = volume.metadata or {}
+                volume.metadata.update({
                     'restore_id': restore_id,
                     'workflow_id': workflow_id,
                     'request_id': req_id,
                     'restore_initiated_at': timeutils.utcnow().isoformat(),
                     'async_restore': 'true'
-                }
-            }
+                })
+                volume.save()
+                LOG.info('Volume metadata updated with restore tracking info [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+                        volume['name'], restore_id, req_id)
+            except Exception as e:
+                LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
+            
+            # Keep volume in creating state - external system will update to available when done
+            LOG.info('Restore initiated successfully - keeping volume in creating state [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+                    volume['name'], restore_id, req_id)
+            
+            # Raise VolumeIsBusy to prevent Cinder from setting status to available
+            # The external system will update status when restore completes
+            raise exception.VolumeIsBusy(volume_name=volume['name'])
 
         except requests.RequestException as e:
             LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
