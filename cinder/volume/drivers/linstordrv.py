@@ -528,6 +528,11 @@ class LinstorDriver(driver.VolumeDriver):
             existing_client=self.c.get(),
         )
 
+        LOG.info("Setting volume status to 'restoring-backup' to indicate an async operation "
+                 "[volume_id: %s] [req_id: %s]", volume['id'], req_id)
+        volume.status = 'restoring-backup'
+        volume.save()
+
         # Make HTTP request to restore snapshot
         api_url = f"{PAPAYA_ENDPOINT}/v1/snapshots/restore"
         headers = {
@@ -595,44 +600,14 @@ class LinstorDriver(driver.VolumeDriver):
                 LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
             
             # Keep volume in creating state - external system will update to available when done
-            LOG.info('Restore initiated successfully - waiting for external completion signal [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                    volume['name'], restore_id, req_id)
+            LOG.info('Restore initiated successfully. Volume will remain in "creating" state. '
+                     '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                     volume['name'], restore_id, req_id)
             
-            # Wait for external system to complete the restore
-            # This keeps the volume in "creating" state until external system is done
-            start_time = time.time()
-            max_wait_time = 3600  # 1 hour timeout
-            check_interval = 60  # Check every minute
-            
-            while True:
-                elapsed = time.time() - start_time
-                if elapsed > max_wait_time:
-                    LOG.error('Timeout waiting for external restore completion after %.1f hours [restore_id: %s] [req_id: %s]', 
-                             elapsed / 3600, restore_id, req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Timeout waiting for external restore completion'))
-                
-                # Check if external system has completed by looking at volume status
-                try:
-                    volume.refresh()
-                    if volume.status == 'available':
-                        LOG.info('External system completed restore - volume now available [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                                volume['name'], restore_id, req_id)
-                        return {}
-                    elif volume.status == 'error':
-                        LOG.error('External system marked restore as failed [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                                 volume['name'], restore_id, req_id)
-                        raise exception.VolumeBackendAPIException(
-                            data=_('External system marked restore as failed'))
-                except Exception as e:
-                    LOG.warning('Failed to check volume status: %s [req_id: %s]', str(e), req_id)
-                
-                LOG.debug('Waiting for external restore completion... [elapsed: %.1f minutes] [restore_id: %s] [req_id: %s]', 
-                         elapsed / 60, restore_id, req_id)
-                time.sleep(check_interval)
-            
-            # This should never be reached but just in case
-            return {}
+            # Return empty dict to keep the volume in its current state (creating).
+            # An external system is expected to monitor for completion and update the
+            # volume status to 'available'.
+            return {'status': 'restoring-backup'}
 
         except requests.RequestException as e:
             LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
