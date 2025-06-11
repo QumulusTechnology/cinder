@@ -595,12 +595,44 @@ class LinstorDriver(driver.VolumeDriver):
                 LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
             
             # Keep volume in creating state - external system will update to available when done
-            LOG.info('Restore initiated successfully - keeping volume in creating state [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+            LOG.info('Restore initiated successfully - waiting for external completion signal [volume_name: %s] [restore_id: %s] [req_id: %s]', 
                     volume['name'], restore_id, req_id)
             
-            # Raise VolumeIsBusy to prevent Cinder from setting status to available
-            # The external system will update status when restore completes
-            raise exception.VolumeIsBusy(volume_name=volume['name'])
+            # Wait for external system to complete the restore
+            # This keeps the volume in "creating" state until external system is done
+            start_time = time.time()
+            max_wait_time = 3600  # 1 hour timeout
+            check_interval = 60  # Check every minute
+            
+            while True:
+                elapsed = time.time() - start_time
+                if elapsed > max_wait_time:
+                    LOG.error('Timeout waiting for external restore completion after %.1f hours [restore_id: %s] [req_id: %s]', 
+                             elapsed / 3600, restore_id, req_id)
+                    raise exception.VolumeBackendAPIException(
+                        data=_('Timeout waiting for external restore completion'))
+                
+                # Check if external system has completed by looking at volume status
+                try:
+                    volume.refresh()
+                    if volume.status == 'available':
+                        LOG.info('External system completed restore - volume now available [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+                                volume['name'], restore_id, req_id)
+                        return {}
+                    elif volume.status == 'error':
+                        LOG.error('External system marked restore as failed [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+                                 volume['name'], restore_id, req_id)
+                        raise exception.VolumeBackendAPIException(
+                            data=_('External system marked restore as failed'))
+                except Exception as e:
+                    LOG.warning('Failed to check volume status: %s [req_id: %s]', str(e), req_id)
+                
+                LOG.debug('Waiting for external restore completion... [elapsed: %.1f minutes] [restore_id: %s] [req_id: %s]', 
+                         elapsed / 60, restore_id, req_id)
+                time.sleep(check_interval)
+            
+            # This should never be reached but just in case
+            return {}
 
         except requests.RequestException as e:
             LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
