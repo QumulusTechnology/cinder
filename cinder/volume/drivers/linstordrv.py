@@ -511,8 +511,6 @@ class LinstorDriver(driver.VolumeDriver):
         LOG.info('Starting volume creation from snapshot [volume_name: %s] [volume_id: %s] [snapshot_name: %s] [snapshot_id: %s] [req_id: %s]', 
                  volume['name'], volume['id'], snapshot['name'], snapshot['id'], req_id)
 
-        LOG.info('Creating volume %s [volume_id: %s] [func: create_volume_from_snapshot] [req_id: %s]', 
-                 volume['name'], volume['id'], req_id)
         LOG.info('Volume size %s [volume_id: %s] [func: create_volume_from_snapshot] [req_id: %s]', 
                  volume['size'], volume['id'], req_id)
         linstor_size = volume['size'] * units.Gi // units.Ki
@@ -520,13 +518,6 @@ class LinstorDriver(driver.VolumeDriver):
                  linstor_size, volume['id'], req_id)
 
         rg = self._resource_group_for_volume_type(volume['volume_type'])
-        linstor.Resource.from_resource_group(
-            uri="[unused]",
-            resource_group_name=rg.name,
-            resource_name=volume['name'],
-            vlm_sizes=[linstor_size],
-            existing_client=self.c.get(),
-        )
 
         LOG.info("Setting volume status to 'restoring-backup' to indicate an async operation "
                  "[volume_id: %s] [req_id: %s]", volume['id'], req_id)
@@ -545,7 +536,8 @@ class LinstorDriver(driver.VolumeDriver):
             'snapshotID': snapshot['id'],
             'targetVolumeID': volume['id'],
             'targetVolumeSize': volume['size'],
-            'volumeType': volume.get('volume_type', {}).get('name', '')
+            'volumeType': volume.get('volume_type', {}).get('name', ''),
+            'linstorStoragePool': rg.storage_pool if hasattr(rg, 'storage_pool') and rg.storage_pool else None
         }
 
         try:
