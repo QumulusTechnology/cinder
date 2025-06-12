@@ -24,6 +24,7 @@ import socket
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
+import eventlet
 from eventlet.green import threading
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -617,7 +618,7 @@ class LinstorDriver(driver.VolumeDriver):
                     raise exception.VolumeBackendAPIException(
                         data=_('Timeout waiting for volume to become available'))
 
-                time.sleep(check_interval)
+                eventlet.sleep(check_interval)
 
                 try:
                     volume.refresh()
