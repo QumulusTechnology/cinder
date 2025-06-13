@@ -537,7 +537,7 @@ class LinstorDriver(driver.VolumeDriver):
             'targetVolumeID': volume['id'],
             'targetVolumeSize': volume['size'],
             'volumeType': volume.get('volume_type', {}).get('name', ''),
-            'linstorStoragePool': rg.storage_pool if hasattr(rg, 'storage_pool') and rg.storage_pool else None
+            'linstorStoragePool': rg.storage_pool[0] if hasattr(rg, 'storage_pool') and rg.storage_pool else None
         }
 
         try:
