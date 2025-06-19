@@ -530,6 +530,11 @@ class LinstorDriver(driver.VolumeDriver):
             'Content-Type': 'application/json',
             'X-Request-ID': req_id
         }
+
+        # Get storage pool - use first storage pool from the list or empty string
+        storage_pool_value = ''
+        if hasattr(rg, 'storage_pool') and rg.storage_pool:
+            storage_pool_value = rg.storage_pool[0] if isinstance(rg.storage_pool, list) else str(rg.storage_pool)
         
         # Prepare request body
         request_body = {
@@ -537,7 +542,7 @@ class LinstorDriver(driver.VolumeDriver):
             'targetVolumeID': volume['id'],
             'targetVolumeSize': volume['size'],
             'volumeType': volume.get('volume_type', {}).get('name', ''),
-            'linstorStoragePool': rg.storage_pool[0] if hasattr(rg, 'storage_pool') and rg.storage_pool else None
+            'linstorStoragePool': storage_pool_value
         }
 
         try:
