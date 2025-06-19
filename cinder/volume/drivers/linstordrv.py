@@ -524,129 +524,140 @@ class LinstorDriver(driver.VolumeDriver):
         volume.status = 'restoring-backup'
         volume.save()
 
-        # Make HTTP request to restore snapshot
-        api_url = f"{PAPAYA_ENDPOINT}/v1/snapshots/restore"
-        headers = {
-            'Content-Type': 'application/json',
-            'X-Request-ID': req_id
-        }
-
-        # Get storage pool - use first storage pool from the list or empty string
-        storage_pool_value = ''
-        if hasattr(rg, 'storage_pool') and rg.storage_pool:
-            storage_pool_value = rg.storage_pool[0] if isinstance(rg.storage_pool, list) else str(rg.storage_pool)
+        # Check if restore is already in progress
+        restore_id = None
+        workflow_id = None
+        if volume.metadata and volume.metadata.get('async_restore') == 'true':
+            restore_id = volume.metadata.get('restore_id')
+            workflow_id = volume.metadata.get('workflow_id')
+            LOG.info('Restore already in progress, returning immediately [volume_id: %s] [restore_id: %s] [req_id: %s]', 
+                     volume['id'], restore_id, req_id)
+            return {}
         
-        # Prepare request body
-        request_body = {
-            'snapshotID': snapshot['id'],
-            'targetVolumeID': volume['id'],
-            'targetVolumeSize': volume['size'],
-            'volumeType': volume.get('volume_type', {}).get('name', ''),
-            'linstorStoragePool': storage_pool_value
-        }
+        if not restore_id:
+            # Make HTTP request to restore snapshot
+            api_url = f"{PAPAYA_ENDPOINT}/v1/snapshots/restore"
+            headers = {
+                'Content-Type': 'application/json',
+                'X-Request-ID': req_id
+            }
 
-        try:
-            # Send POST request to restore snapshot
-            LOG.info('Sending snapshot restore request to %s [req_id: %s]', api_url, req_id)
-            response = requests.post(
-                api_url,
-                headers=headers,
-                json=request_body,
-                timeout=30
-            )
-
-            if response.status_code not in (200, 202):
-                LOG.error('Failed to restore snapshot. Status: %d, Response: %s [req_id: %s]', 
-                         response.status_code, response.text, req_id)
-                raise exception.VolumeBackendAPIException(
-                    data=_('Failed to restore snapshot: %s') % response.text)
-
-            # Parse response
-            response_data = response.json()
+            # Get storage pool - use first storage pool from the list or empty string
+            storage_pool_value = ''
+            if hasattr(rg, 'storage_pool') and rg.storage_pool:
+                storage_pool_value = rg.storage_pool[0] if isinstance(rg.storage_pool, list) else str(rg.storage_pool)
             
-            # Debug: Log the actual response received
-            LOG.info("Full API response received [req_id: %s]: %s", req_id, response_data)
-            LOG.info("Response keys available [req_id: %s]: %s", req_id, list(response_data.keys()))
-            
-            # Get restore ID from response - try multiple possible field names
-            restore_id = response_data.get("restoreID")
-            if not restore_id:
-                LOG.error("No restore ID in response. Available fields: %s, Full response: %s [req_id: %s]", 
-                         list(response_data.keys()), response_data, req_id)
-                raise exception.VolumeBackendAPIException(
-                    data=_("No restore ID in response. Available fields: %s") % list(response_data.keys()))
+            # Prepare request body
+            request_body = {
+                'snapshotID': snapshot['id'],
+                'targetVolumeID': volume['id'],
+                'targetVolumeSize': volume['size'],
+                'volumeType': volume.get('volume_type', {}).get('name', ''),
+                'linstorStoragePool': storage_pool_value
+            }
 
-            workflow_id = response_data.get('workflowID')
-            LOG.info('Initial restore request successful, restore ID: %s, workflow ID: %s [req_id: %s]', 
-                    restore_id, workflow_id, req_id)
-
-            # Store restore metadata for external monitoring
             try:
-                volume.metadata = volume.metadata or {}
-                volume.metadata.update({
-                    'restore_id': restore_id,
-                    'workflow_id': workflow_id,
-                    'request_id': req_id,
-                    'restore_initiated_at': timeutils.utcnow().isoformat(),
-                    'async_restore': 'true'
-                })
-                volume.save()
-                LOG.info('Volume metadata updated with restore tracking info [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                        volume['name'], restore_id, req_id)
-            except Exception as e:
-                LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
-            
-            # Keep volume in creating state - external system will update to available when done
-            LOG.info('Restore initiated successfully. Polling for completion... '
-                     '[volume_name: %s] [restore_id: %s] [req_id: %s]',
-                     volume['name'], restore_id, req_id)
+                # Send POST request to restore snapshot
+                LOG.info('Sending snapshot restore request to %s [req_id: %s]', api_url, req_id)
+                response = requests.post(
+                    api_url,
+                    headers=headers,
+                    json=request_body,
+                    timeout=30
+                )
 
-            start_time = time.time()
-            max_wait_time = 3600  # 1 hour timeout
-            check_interval = 30  # Check every 60 seconds
-
-            while True:
-                elapsed = time.time() - start_time
-                if elapsed > max_wait_time:
-                    LOG.error('Timeout waiting for volume to become available after 1 hour '
-                              '[volume_name: %s] [restore_id: %s] [req_id: %s]',
-                              volume['name'], restore_id, req_id)
+                if response.status_code not in (200, 202):
+                    LOG.error('Failed to restore snapshot. Status: %d, Response: %s [req_id: %s]', 
+                             response.status_code, response.text, req_id)
                     raise exception.VolumeBackendAPIException(
-                        data=_('Timeout waiting for volume to become available'))
+                        data=_('Failed to restore snapshot: %s') % response.text)
 
-                time.sleep(check_interval)
+                # Parse response
+                response_data = response.json()
+                
+                # Debug: Log the actual response received
+                LOG.info("Full API response received [req_id: %s]: %s", req_id, response_data)
+                LOG.info("Response keys available [req_id: %s]: %s", req_id, list(response_data.keys()))
+                
+                # Get restore ID from response - try multiple possible field names
+                restore_id = response_data.get("restoreID")
+                if not restore_id:
+                    LOG.error("No restore ID in response. Available fields: %s, Full response: %s [req_id: %s]", 
+                             list(response_data.keys()), response_data, req_id)
+                    raise exception.VolumeBackendAPIException(
+                        data=_("No restore ID in response. Available fields: %s") % list(response_data.keys()))
 
+                workflow_id = response_data.get('workflowID')
+                LOG.info('Initial restore request successful, restore ID: %s, workflow ID: %s [req_id: %s]', 
+                        restore_id, workflow_id, req_id)
+
+                # Store restore metadata for external monitoring
                 try:
-                    volume.refresh()
-                except Exception as refresh_error:
-                    LOG.warning('Failed to refresh volume during polling: %s [req_id: %s]',
-                                str(refresh_error), req_id)
-                    continue
+                    volume.metadata = volume.metadata or {}
+                    volume.metadata.update({
+                        'restore_id': restore_id,
+                        'workflow_id': workflow_id,
+                        'request_id': req_id,
+                        'restore_initiated_at': timeutils.utcnow().isoformat(),
+                        'async_restore': 'true'
+                    })
+                    volume.save()
+                    LOG.info('Volume metadata updated with restore tracking info [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+                            volume['name'], restore_id, req_id)
+                except Exception as e:
+                    LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
+            
+            except requests.RequestException as e:
+                LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
+                raise exception.VolumeBackendAPIException(
+                    data=_('Request error creating volume from snapshot: %s') % str(e))
+            except Exception as e:
+                LOG.error('Unexpected error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
+                raise exception.VolumeBackendAPIException(
+                    data=_('Unexpected error creating volume from snapshot: %s') % str(e))
+        
+        # Keep volume in creating state - external system will update to available when done
+        LOG.info('Restore initiated successfully. Polling for completion... '
+                 '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                 volume['name'], restore_id, req_id)
 
-                LOG.debug('Polling: current volume status is "%s" [elapsed: %.1f minutes] '
+        start_time = time.time()
+        max_wait_time = 3600  # 1 hour timeout
+        check_interval = 30  # Check every 60 seconds
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > max_wait_time:
+                LOG.error('Timeout waiting for volume to become available after 1 hour '
                           '[volume_name: %s] [restore_id: %s] [req_id: %s]',
-                          volume.status, elapsed / 60, volume['name'], restore_id, req_id)
+                          volume['name'], restore_id, req_id)
+                raise exception.VolumeBackendAPIException(
+                    data=_('Timeout waiting for volume to become available'))
 
-                if volume.status == 'available':
-                    LOG.info('Volume is now available. Restore completed. '
-                             '[volume_name: %s] [restore_id: %s] [req_id: %s]',
-                             volume['name'], restore_id, req_id)
-                    return {}
-                elif volume.status == 'error':
-                    LOG.error('Volume entered "error" state during restore. '
-                              '[volume_name: %s] [restore_id: %s] [req_id: %s]',
-                              volume['name'], restore_id, req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Volume restore failed, status changed to error.'))
+            time.sleep(check_interval)
 
-        except requests.RequestException as e:
-            LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
-            raise exception.VolumeBackendAPIException(
-                data=_('Request error creating volume from snapshot: %s') % str(e))
-        except Exception as e:
-            LOG.error('Unexpected error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
-            raise exception.VolumeBackendAPIException(
-                data=_('Unexpected error creating volume from snapshot: %s') % str(e))
+            try:
+                volume.refresh()
+            except Exception as refresh_error:
+                LOG.warning('Failed to refresh volume during polling: %s [req_id: %s]',
+                            str(refresh_error), req_id)
+                continue
+
+            LOG.debug('Polling: current volume status is "%s" [elapsed: %.1f minutes] '
+                      '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                      volume.status, elapsed / 60, volume['name'], restore_id, req_id)
+
+            if volume.status == 'available':
+                LOG.info('Volume is now available. Restore completed. '
+                         '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                         volume['name'], restore_id, req_id)
+                return {}
+            elif volume.status == 'error':
+                LOG.error('Volume entered "error" state during restore. '
+                          '[volume_name: %s] [restore_id: %s] [req_id: %s]',
+                          volume['name'], restore_id, req_id)
+                raise exception.VolumeBackendAPIException(
+                    data=_('Volume restore failed, status changed to error.'))
 
     @wrap_linstor_api_exception
     @volume_utils.trace
