@@ -546,65 +546,64 @@ class LinstorDriver(driver.VolumeDriver):
         }
 
         try:
-            # Check if restore is already in progress for this volume
-            existing_restore_id = None
-            if hasattr(volume, 'metadata') and volume.metadata:
-                existing_restore_id = volume.metadata.get('restore_id')
-                if existing_restore_id:
-                    LOG.info('Restore already initiated for volume [volume_id: %s] [existing_restore_id: %s] [req_id: %s]',
-                             volume['id'], existing_restore_id, req_id)
-                    # Skip HTTP request and go directly to polling
-                    restore_id = existing_restore_id
-                    workflow_id = volume.metadata.get('workflow_id', '')
-                else:
-                    # No existing restore, need to initiate new restore with HTTP retry for connection issues only
-                    restore_id, workflow_id = self._initiate_snapshot_restore_with_retry(
-                        api_url, headers, request_body, req_id)
-                    
-                    # Store restore metadata for future retries/polling
-                    try:
-                        volume.metadata = volume.metadata or {}
-                        volume.metadata.update({
-                            'restore_id': restore_id,
-                            'workflow_id': workflow_id,
-                            'request_id': req_id,
-                            'restore_initiated_at': timeutils.utcnow().isoformat(),
-                            'async_restore': 'true'
-                        })
-                        volume.save()
-                        LOG.info('Volume metadata updated with restore tracking info [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                                volume['name'], restore_id, req_id)
-                    except Exception as e:
-                        LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
-            else:
-                # No metadata available, initiate new restore
-                restore_id, workflow_id = self._initiate_snapshot_restore_with_retry(
-                    api_url, headers, request_body, req_id)
-                
-                # Store restore metadata
-                try:
-                    volume.metadata = volume.metadata or {}
-                    volume.metadata.update({
-                        'restore_id': restore_id,
-                        'workflow_id': workflow_id,
-                        'request_id': req_id,
-                        'restore_initiated_at': timeutils.utcnow().isoformat(),
-                        'async_restore': 'true'
-                    })
-                    volume.save()
-                    LOG.info('Volume metadata updated with restore tracking info [volume_name: %s] [restore_id: %s] [req_id: %s]', 
-                            volume['name'], restore_id, req_id)
-                except Exception as e:
-                    LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
+            # Send POST request to restore snapshot
+            LOG.info('Sending snapshot restore request to %s [req_id: %s]', api_url, req_id)
+            response = requests.post(
+                api_url,
+                headers=headers,
+                json=request_body,
+                timeout=30
+            )
 
-            # Now poll for completion (this part never retries the restore operation)
+            if response.status_code not in (200, 202):
+                LOG.error('Failed to restore snapshot. Status: %d, Response: %s [req_id: %s]', 
+                         response.status_code, response.text, req_id)
+                raise exception.VolumeBackendAPIException(
+                    data=_('Failed to restore snapshot: %s') % response.text)
+
+            # Parse response
+            response_data = response.json()
+            
+            # Debug: Log the actual response received
+            LOG.info("Full API response received [req_id: %s]: %s", req_id, response_data)
+            LOG.info("Response keys available [req_id: %s]: %s", req_id, list(response_data.keys()))
+            
+            # Get restore ID from response - try multiple possible field names
+            restore_id = response_data.get("restoreID")
+            if not restore_id:
+                LOG.error("No restore ID in response. Available fields: %s, Full response: %s [req_id: %s]", 
+                         list(response_data.keys()), response_data, req_id)
+                raise exception.VolumeBackendAPIException(
+                    data=_("No restore ID in response. Available fields: %s") % list(response_data.keys()))
+
+            workflow_id = response_data.get('workflowID')
+            LOG.info('Initial restore request successful, restore ID: %s, workflow ID: %s [req_id: %s]', 
+                    restore_id, workflow_id, req_id)
+
+            # Store restore metadata for external monitoring
+            try:
+                volume.metadata = volume.metadata or {}
+                volume.metadata.update({
+                    'restore_id': restore_id,
+                    'workflow_id': workflow_id,
+                    'request_id': req_id,
+                    'restore_initiated_at': timeutils.utcnow().isoformat(),
+                    'async_restore': 'true'
+                })
+                volume.save()
+                LOG.info('Volume metadata updated with restore tracking info [volume_name: %s] [restore_id: %s] [req_id: %s]', 
+                        volume['name'], restore_id, req_id)
+            except Exception as e:
+                LOG.warning('Failed to update volume metadata: %s [req_id: %s]', str(e), req_id)
+            
+            # Keep volume in creating state - external system will update to available when done
             LOG.info('Restore initiated successfully. Polling for completion... '
                      '[volume_name: %s] [restore_id: %s] [req_id: %s]',
                      volume['name'], restore_id, req_id)
 
             start_time = time.time()
             max_wait_time = 3600  # 1 hour timeout
-            check_interval = 30  # Check every 30 seconds
+            check_interval = 30  # Check every 60 seconds
 
             while True:
                 elapsed = time.time() - start_time
@@ -640,90 +639,14 @@ class LinstorDriver(driver.VolumeDriver):
                     raise exception.VolumeBackendAPIException(
                         data=_('Volume restore failed, status changed to error.'))
 
+        except requests.RequestException as e:
+            LOG.error('Request error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
+            raise exception.VolumeBackendAPIException(
+                data=_('Request error creating volume from snapshot: %s') % str(e))
         except Exception as e:
             LOG.error('Unexpected error during volume creation from snapshot: %s [req_id: %s]', str(e), req_id)
             raise exception.VolumeBackendAPIException(
                 data=_('Unexpected error creating volume from snapshot: %s') % str(e))
-
-    def _initiate_snapshot_restore_with_retry(self, api_url, headers, request_body, req_id):
-        """Initiate snapshot restore with retry only for connection failures"""
-        max_retries = 3
-        retry_delays = [2, 5, 10]  # seconds to wait between retries
-        
-        for attempt in range(max_retries):
-            try:
-                LOG.info('Sending snapshot restore request to %s (attempt %d/%d) [req_id: %s]', 
-                         api_url, attempt + 1, max_retries, req_id)
-                
-                response = requests.post(
-                    api_url,
-                    headers=headers,
-                    json=request_body,
-                    timeout=30
-                )
-
-                if response.status_code not in (200, 202):
-                    LOG.error('Failed to restore snapshot. Status: %d, Response: %s [req_id: %s]', 
-                             response.status_code, response.text, req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Failed to restore snapshot: %s') % response.text)
-
-                # Parse successful response
-                response_data = response.json()
-                
-                # Get restore ID from response
-                restore_id = response_data.get("restoreID")
-                if not restore_id:
-                    LOG.error("No restore ID in response. Available fields: %s, Full response: %s [req_id: %s]", 
-                             list(response_data.keys()), response_data, req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_("No restore ID in response. Available fields: %s") % list(response_data.keys()))
-
-                workflow_id = response_data.get('workflowID', '')
-                LOG.info('Snapshot restore request successful, restore ID: %s, workflow ID: %s [req_id: %s]', 
-                        restore_id, workflow_id, req_id)
-                
-                return restore_id, workflow_id
-
-            except requests.exceptions.ConnectionError as e:
-                # Only retry on connection errors (service down, network issues)
-                if attempt < max_retries - 1:
-                    wait_time = retry_delays[attempt]
-                    LOG.warning('Connection error to Papaya service, retrying in %d seconds (attempt %d/%d): %s [req_id: %s]', 
-                               wait_time, attempt + 1, max_retries, str(e), req_id)
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    LOG.error('Failed to connect to Papaya service after %d attempts: %s [req_id: %s]', 
-                             max_retries, str(e), req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Failed to connect to Papaya service after %d attempts: %s') % (max_retries, str(e)))
-            
-            except requests.exceptions.Timeout as e:
-                # Only retry on timeout errors
-                if attempt < max_retries - 1:
-                    wait_time = retry_delays[attempt]
-                    LOG.warning('Timeout connecting to Papaya service, retrying in %d seconds (attempt %d/%d): %s [req_id: %s]', 
-                               wait_time, attempt + 1, max_retries, str(e), req_id)
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    LOG.error('Papaya service timeout after %d attempts: %s [req_id: %s]', 
-                             max_retries, str(e), req_id)
-                    raise exception.VolumeBackendAPIException(
-                        data=_('Papaya service timeout after %d attempts: %s') % (max_retries, str(e)))
-            
-            except requests.RequestException as e:
-                # For other request errors, don't retry - these are likely permanent failures
-                LOG.error('Request error during snapshot restore (no retry): %s [req_id: %s]', str(e), req_id)
-                raise exception.VolumeBackendAPIException(
-                    data=_('Request error creating volume from snapshot: %s') % str(e))
-            
-            except Exception as e:
-                # For other errors, don't retry
-                LOG.error('Unexpected error during snapshot restore (no retry): %s [req_id: %s]', str(e), req_id)
-                raise exception.VolumeBackendAPIException(
-                    data=_('Unexpected error creating volume from snapshot: %s') % str(e))
 
     @wrap_linstor_api_exception
     @volume_utils.trace
