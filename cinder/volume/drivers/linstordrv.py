@@ -819,12 +819,15 @@ class LinstorDriver(driver.VolumeDriver):
             'Content-Type': 'application/json',
             'X-Request-ID': req_id
         }
+
+        is_automated = snapshot['metadata'].get('automated', "false")
         
         # Prepare request body
         request_body = {
             'snapshotName': snapshot['name'],
             'snapshotID': snapshot['id'],
-            'volumeID': snapshot['volume_id']
+            'volumeID': snapshot['volume_id'],
+            "isAutomated": is_automated == "true"
         }
 
         try:
