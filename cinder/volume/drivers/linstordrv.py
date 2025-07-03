@@ -483,13 +483,15 @@ class LinstorDriver(driver.VolumeDriver):
         :param cinder.objects.volume.Volume volume: The new volume to create
         :return: A dict of fields to update on the volume object
         """
-        LOG.info('Creating volume %s [volume_id: %s] [func: create_volume]', 
-                 volume['name'], volume['id'])
-        LOG.info('Volume size %s [volume_id: %s] [func: create_volume]', 
-                 volume['size'], volume['id'])
+        # Generate request ID for tracking
+        req_id = str(uuid.uuid4())
+        LOG.info('Creating volume %s [volume_id: %s] [req_id: %s] [func: create_volume]', 
+                 volume['name'], volume['id'], req_id)
+        LOG.info('Volume size %s [volume_id: %s] [req_id: %s] [func: create_volume]', 
+                 volume['size'], volume['id'], req_id)
         linstor_size = volume['size'] * units.Gi // units.Ki
-        LOG.info('LINSTOR size %s [volume_id: %s] [func: create_volume]', 
-                 linstor_size, volume['id'])
+        LOG.info('LINSTOR size %s [volume_id: %s] [req_id: %s] [func: create_volume]', 
+                 linstor_size, volume['id'], req_id)
 
         rg = self._resource_group_for_volume_type(volume['volume_type'])
         linstor.Resource.from_resource_group(
@@ -500,7 +502,83 @@ class LinstorDriver(driver.VolumeDriver):
             existing_client=self.c.get(),
         )
 
-        return {}
+        LOG.info('Volume created in LINSTOR, starting status verification [volume_id: %s] [req_id: %s]', 
+                 volume['id'], req_id)
+
+        # Poll for volume status every 3 seconds with 50 seconds timeout
+        start_time = time.time()
+        timeout = 50  # 50 seconds timeout
+        poll_interval = 3  # 3 seconds between polls
+
+        while True:
+            # Check if we've exceeded timeout
+            if time.time() - start_time > timeout:
+                LOG.error('Timeout waiting for volume creation verification after %d seconds [volume_id: %s] [req_id: %s]', 
+                         timeout, volume['id'], req_id)
+                
+                # Cleanup the volume since verification failed
+                try:
+                    LOG.info('Cleaning up volume due to verification timeout [volume_id: %s] [req_id: %s]', 
+                             volume['id'], req_id)
+                    rsc = _get_existing_resource(self.c.get(), volume['name'], volume['id'])
+                    rsc.delete()
+                    LOG.info('Volume cleanup completed [volume_id: %s] [req_id: %s]', 
+                             volume['id'], req_id)
+                except Exception as cleanup_error:
+                    LOG.error('Failed to cleanup volume: %s [volume_id: %s] [req_id: %s]', 
+                             str(cleanup_error), volume['id'], req_id)
+                
+                raise exception.VolumeBackendAPIException(
+                    data=_('Timeout waiting for volume creation verification'))
+
+            # Wait before polling
+            time.sleep(poll_interval)
+
+            # Check volume status
+            try:
+                status_url = f"{PAPAYA_ENDPOINT}/v1/volumes/status"
+                status_params = {
+                    'volume_id': volume['id']
+                }
+                headers = {
+                    'Content-Type': 'application/json',
+                    'X-Request-ID': req_id
+                }
+
+                LOG.debug('Checking volume status [volume_id: %s] [req_id: %s]', 
+                         volume['id'], req_id)
+                
+                status_response = requests.get(
+                    status_url,
+                    params=status_params,
+                    headers=headers,
+                    timeout=30
+                )
+
+                if status_response.status_code != 200:
+                    LOG.error('Failed to get volume status. Status: %d, Response: %s [volume_id: %s] [req_id: %s]', 
+                             status_response.status_code, status_response.text, volume['id'], req_id)
+                    continue
+
+                status_data = status_response.json()
+                
+                if status_data.get('success'):
+                    LOG.info('Volume creation verification successful [volume_id: %s] [req_id: %s]', 
+                            volume['id'], req_id)
+                    return {}
+                else:
+                    # If we get here, verification is still in progress
+                    LOG.debug('Volume creation verification in progress... [volume_id: %s] [req_id: %s]', 
+                             volume['id'], req_id)
+
+            except requests.RequestException as e:
+                LOG.error('Request error during volume status check: %s [volume_id: %s] [req_id: %s]', 
+                         str(e), volume['id'], req_id)
+                continue
+            except Exception as e:
+                LOG.error('Unexpected error during volume status check: %s [volume_id: %s] [req_id: %s]', 
+                         str(e), volume['id'], req_id)
+                continue
 
     @wrap_linstor_api_exception
     @volume_utils.trace
