@@ -80,7 +80,7 @@ CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 # Map with cases where attach status differs from volume status
-ATTACH_STATUS_MAP = {'attached': 'in-use', 'detached': 'available'}
+ATTACH_STATUS_MAP = {'attached': 'in-use', 'detached': 'available', 'reserved': 'available'}
 
 options.set_defaults(CONF, connection='sqlite:///$state_path/cinder.sqlite')
 
