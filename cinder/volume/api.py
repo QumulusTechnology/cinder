@@ -2431,12 +2431,18 @@ class API(base.Base):
         # locally on the Cinder node.  Just come up with an easy way to
         # determine if we're attaching to the Cinder host for some work or if
         # we're being used by the outside world.
-        expected = {'multiattach': vref.multiattach,
-                    'status': (('available', 'in-use', 'downloading')
-                               if vref.multiattach
-                               else ('available', 'downloading'))}
-
-        result = vref.conditional_update({'status': 'reserved'}, expected)
+        
+        # For multiattach volumes, don't change volume status during reservation
+        # since concurrent access is the whole point of multiattach design.
+        # Only single-attach volumes need status reservation for exclusive access.
+        if vref.multiattach:
+            # Multiattach: Create attachment without changing volume status
+            result = True  # Skip the conditional_update for multiattach
+        else:
+            # Single-attach: Use traditional reservation (available/downloading -> reserved)
+            expected = {'multiattach': vref.multiattach,
+                        'status': ('available', 'downloading')}
+            result = vref.conditional_update({'status': 'reserved'}, expected)
 
         if not result:
             override = False
